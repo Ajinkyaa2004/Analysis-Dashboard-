@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: sales-dashboard
+    env: python
+    region: singapore  # Choose closest to your users: oregon, frankfurt, singapore, ohio
+    plan: free  # Options: free, starter ($7/mo), standard ($25/mo)
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: STREAMLIT_SERVER_HEADLESS
+        value: true
+      - key: STREAMLIT_SERVER_ENABLE_CORS
+        value: false
+      - key: STREAMLIT_SERVER_PORT
+        value: 8501
