@@ -1268,7 +1268,7 @@ if all_files_uploaded:
 
     if not filtered_historical_df.empty:
         # Create tabs for better organization
-        tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Quarter Analysis", "Week Analysis", "Comparative Analysis"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Quarter Analysis", "Week Analysis", "Comparative Analysis", "Customer Analysis"])
         
         with tab1:
             st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-gauge-high" style="color:#3B82F6;"></i> Annual Sales Overview</h3>', unsafe_allow_html=True)
@@ -1323,7 +1323,7 @@ if all_files_uploaded:
                 fig_annual_hist.update_traces(
                     hovertemplate='<b>%{x}</b><br>Branch: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
                 )
-                st.plotly_chart(fig_annual_hist, use_container_width=True)
+                st.plotly_chart(fig_annual_hist, use_container_width=True, key='annual_hist_overview')
                 
                 st.markdown("<div style='margin-bottom: 2rem;'></div>", unsafe_allow_html=True)
 
@@ -1381,7 +1381,290 @@ if all_files_uploaded:
                 hovertemplate='<b>%{label}</b><br>Total: $%{value:,.2f}<br>Share: %{percent}<extra></extra>',
                 insidetextorientation='auto'
             )
-            st.plotly_chart(fig_branch_pie, use_container_width=True)
+            st.plotly_chart(fig_branch_pie, use_container_width=True, key='branch_pie_overview')
+            
+            st.markdown("<div style='margin-bottom: 2rem;'></div>", unsafe_allow_html=True)
+            
+            # --- Week Analysis in Overview ---
+            st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-filter" style="color:#3B82F6;"></i> Quarter / Week Range Analysis</h3>', unsafe_allow_html=True)
+
+            # Dynamically generate quarter options from configuration
+            quarters_config = st.session_state.config['quarters']
+            quarter_options = ["All Quarters"]
+            quarter_mapping = {}
+            for q_name, (start, end) in quarters_config.items():
+                display_name = f"{q_name} (Weeks {start}-{end})"
+                quarter_options.append(display_name)
+                quarter_mapping[display_name] = (start, end)
+            
+            selected_quarters_display_overview = st.multiselect("Select Quarter(s)", quarter_options, default=["All Quarters"], key='quarters_overview')
+
+            # Option to select specific week ranges
+            all_weeks = sorted(filtered_historical_df['Week'].unique().tolist())
+            selected_weeks_overview = st.multiselect("Or, Select Specific Week(s)", all_weeks, key='weeks_overview')
+
+            # Filter data based on quarter or week range selection
+            quarter_week_filtered_df_overview = filtered_historical_df.copy()
+
+            # Apply quarter filter if selected
+            if "All Quarters" not in selected_quarters_display_overview:
+                quarter_weeks = []
+                for q_display in selected_quarters_display_overview:
+                    start_week, end_week = quarter_mapping[q_display]
+                    quarter_weeks.extend(range(start_week, end_week + 1))
+                quarter_week_filtered_df_overview = quarter_week_filtered_df_overview[quarter_week_filtered_df_overview['Week'].isin(quarter_weeks)]
+
+            # Apply specific week filter if selected (overrides quarter if both selected)
+            if selected_weeks_overview:
+                quarter_week_filtered_df_overview = quarter_week_filtered_df_overview[quarter_week_filtered_df_overview['Week'].isin(selected_weeks_overview)]
+
+            if not quarter_week_filtered_df_overview.empty:
+                st.write(f"**Detailed Sales for Selected Range**")
+                display_quarter_week_df = quarter_week_filtered_df_overview[['Branch', 'Financial Year', 'Week', 'Total']].sort_values(['Branch', 'Financial Year', 'Week'])
+                
+                # Optimized rendering for large dataframe
+                st.dataframe(
+                    display_quarter_week_df,
+                    column_config={
+                        "Total": st.column_config.NumberColumn(
+                            "Total Sales",
+                            format=f"{st.session_state.config['currency_symbol']}%.2f"
+                        ),
+                        "Week": st.column_config.NumberColumn("Week #", format="%d")
+                    },
+                    use_container_width=True,
+                    height=400
+                )
+
+                total_sales_for_range = quarter_week_filtered_df_overview['Total'].sum()
+                st.metric(label=f"Total Sales for Selected Range", value=format_currency(total_sales_for_range))
+
+                # Line chart for selected week range/quarter
+                st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-chart-area" style="color:#3B82F6;"></i> Sales Trend for Selected Range</h3>', unsafe_allow_html=True)
+                fig_quarter_week_trend_overview = px.line(
+                    quarter_week_filtered_df_overview,
+                    x='Week',
+                    y='Total',
+                    color='Branch',
+                    line_dash='Financial Year',
+                    markers=True,
+                    title='Sales Trend by Week for Selected Range',
+                    color_discrete_sequence=px.colors.qualitative.Prism
+                )
+                apply_chart_theme(fig_quarter_week_trend_overview, title="Sales Trend by Week", height=450)
+                fig_quarter_week_trend_overview.update_layout(
+                    legend=dict(
+                        orientation="v",
+                        yanchor="top",
+                        y=1,
+                        xanchor="left",
+                        x=1.01,
+                        font=dict(size=10),
+                        title=dict(text="Branch, Financial Year", font=dict(size=11))
+                    ),
+                    margin=dict(r=220)
+                )
+                fig_quarter_week_trend_overview.update_traces(
+                    hovertemplate='<b>Week %{x}</b><br>%{fullData.name}<br>$%{y:,.0f}<extra></extra>'
+                )
+                fig_quarter_week_trend_overview.update_xaxes(dtick=1)
+                st.plotly_chart(fig_quarter_week_trend_overview, use_container_width=True, key='week_trend_overview')
+
+            else:
+                st.info("No sales data available for the selected quarter(s) or week range based on current filters.")
+            
+            st.markdown("<div style='margin-bottom: 2rem;'></div>", unsafe_allow_html=True)
+            
+            # --- Monthly Sales in Overview ---
+            st.markdown('<h2><i class="fa-solid fa-chart-area" style="color:#3B82F6;margin-right:0.4rem;"></i>Monthly Branch Sales</h2>', unsafe_allow_html=True)
+            monthly_sales = filtered_df.groupby(['Month', 'Branch'])['Total'].sum().reset_index()
+
+            fig_month = px.line(
+                monthly_sales, x="Month", y="Total", color="Branch", markers=True,
+                title="Monthly Sales by Branch",
+                color_discrete_sequence=px.colors.qualitative.Prism
+            )
+            fig_month.update_traces(
+                mode='lines+markers',
+                hovertemplate='<b>%{x}</b><br>Branch: %{fullData.name}<br>Sales: $%{y:,.0f}<extra></extra>'
+            )
+            apply_chart_theme(fig_month, title="Monthly Sales Trend", height=450)
+            st.plotly_chart(fig_month, use_container_width=True, key='monthly_sales_overview')
+            
+            st.markdown("<div style='margin-bottom: 2rem;'></div>", unsafe_allow_html=True)
+            
+            # --- Customer Analysis in Overview ---
+            st.markdown('<h2><i class="fa-solid fa-users" style="color:#3B82F6;margin-right:0.4rem;"></i>Customer Trends <span style="font-size:0.9rem;color:#64748B;font-weight:500;">(Drop vs Rise)</span></h2>', unsafe_allow_html=True)
+
+            customer_sales = df[df['Branch'].isin(branch)].groupby(['Customer', 'Year'])['Total'].sum().reset_index()
+            sales_pivot = customer_sales.pivot(index='Customer', columns='Year', values='Total').fillna(0)
+
+            years = sorted(sales_pivot.columns)
+            year_window = st.session_state.config['year_comparison_window']
+            
+            if len(years) >= year_window:
+                # Compare the most recent year with the average of previous years based on window
+                recent_years = years[-year_window:]
+                current_year = recent_years[-1]
+                previous_year = recent_years[-2]
+                
+                sales_pivot['Drop?'] = sales_pivot[current_year] < sales_pivot[previous_year]
+                sales_pivot['Rise?'] = sales_pivot[current_year] > sales_pivot[previous_year]
+
+                dropping_customers = sales_pivot[sales_pivot['Drop?']].reset_index()
+                rising_customers = sales_pivot[sales_pivot['Rise?']].reset_index()
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f'<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrow-trend-down" style="color:#EF4444;"></i> Dropping Customers ({previous_year} → {current_year})</h3>', unsafe_allow_html=True)
+                    display_cols = ['Customer'] + [previous_year, current_year]
+                    st.dataframe(
+                        apply_table_style(dropping_customers[display_cols], format_cols=display_cols[1:]),
+                        use_container_width=True
+                    )
+
+                with col2:
+                    st.markdown(f'<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrow-trend-up" style="color:#10B981;"></i> Rising Customers ({previous_year} → {current_year})</h3>', unsafe_allow_html=True)
+                    st.dataframe(
+                        apply_table_style(rising_customers[display_cols], format_cols=display_cols[1:]),
+                        use_container_width=True
+                    )
+            else:
+                st.info(f"Not enough years for drop/rise analysis. Need at least {year_window} years of data.")
+
+            # ---- Customer Purchase View ---- #
+            st.markdown('<h2><i class="fa-solid fa-receipt" style="color:#3B82F6;margin-right:0.4rem;"></i>Customer-wise Purchase Detail</h2>', unsafe_allow_html=True)
+
+            # Multiselect Customer - Check for Customer Name column
+            # Find customer name column if it exists
+            customer_name_col = None
+            for col in filtered_df.columns:
+                if 'customer' in col.lower() and 'name' in col.lower():
+                    customer_name_col = col
+                    break
+            
+            if customer_name_col and customer_name_col in filtered_df.columns:
+                # Create a mapping between Customer ID and Customer Name
+                customer_mapping = filtered_df[['Customer', customer_name_col]].drop_duplicates()
+                customer_mapping = customer_mapping[customer_mapping[customer_name_col].notna()]
+                
+                # Create display options (Customer Name)
+                display_options = sorted(customer_mapping[customer_name_col].unique())
+                
+                selected_customer_names = st.multiselect(
+                    "Select Customer(s) to Analyze",
+                    options=display_options,
+                    default=display_options[:1] if len(display_options) > 0 else [],
+                    key='customer_overview'
+                )
+                
+                # Map selected names back to Customer IDs
+                selected_customers_overview = customer_mapping[
+                    customer_mapping[customer_name_col].isin(selected_customer_names)
+                ]['Customer'].tolist()
+            else:
+                # Fallback to Customer ID if no Customer Name column exists
+                cust_df = filtered_df.groupby(['Customer', 'Year'])['Total'].sum().reset_index()
+                selected_customers_overview = st.multiselect(
+                    "Select Customer(s) to Analyze",
+                    options=sorted(cust_df['Customer'].unique()),
+                    default=cust_df['Customer'].unique()[:1],
+                    key='customer_overview'
+                )
+            
+            if selected_customers_overview and len(selected_customers_overview) > 0:
+
+                # Date Range Filter
+                cust_date_range_overview = st.date_input(
+                    "Select Date Range for Purchase Analysis",
+                    [filtered_df['Issue Date'].min(), filtered_df['Issue Date'].max()],
+                    key='date_range_overview'
+                )
+                cust_start_date = pd.to_datetime(cust_date_range_overview[0])
+                cust_end_date = pd.to_datetime(cust_date_range_overview[1])
+
+                # Filter based on selection
+                cust_purchase = filtered_df[
+                    (filtered_df['Customer'].isin(selected_customers_overview)) &
+                    (filtered_df['Issue Date'].between(cust_start_date, cust_end_date))
+                ]
+
+                # Show drop warnings
+                if 'dropping_customers' in locals() and 'previous_year' in locals() and 'current_year' in locals():
+                    for cust in selected_customers_overview:
+                        if cust in dropping_customers['Customer'].values:
+                            # Optimized warning
+                            st.warning(f"{cust} is a dropping customer (sales declined from {previous_year} to {current_year}).")
+
+                # Show raw purchase records
+                st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-table-list" style="color:#3B82F6;"></i> Filtered Purchase Records</h3>', unsafe_allow_html=True)
+                display_cust_purchase = cust_purchase[['Customer', 'Issue Date', 'Branch', 'Invoice ID', 'Total']]
+                
+                # Optimized rendering: Using native column configuration for performance
+                st.dataframe(
+                    display_cust_purchase,
+                    column_config={
+                        "Issue Date": st.column_config.DateColumn(
+                            "Date",
+                            format="DD/MM/YYYY" if st.session_state.config['date_format'] == 'dayfirst' else "MM/DD/YYYY"
+                        ),
+                        "Total": st.column_config.NumberColumn(
+                            "Total Purchase",
+                            format=f"{st.session_state.config['currency_symbol']}%.2f"
+                        ),
+                        "Customer": "Customer Name",
+                        "Branch": "Branch",
+                        "Invoice ID": "Invoice"
+                    },
+                    use_container_width=True,
+                    height=500,
+                    hide_index=True
+                )
+
+                # Calculate and display the total sum of purchases
+                total_filtered_purchase = cust_purchase['Total'].sum()
+                st.metric(label="Total Purchase for Filtered Records", value=format_currency(total_filtered_purchase))
+
+                # Year-wise Total Purchases (Bar Chart)
+                st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-chart-column" style="color:#3B82F6;"></i> Year-wise Purchase Totals</h3>', unsafe_allow_html=True)
+                cust_yearly = cust_purchase.groupby(['Customer', 'Year'])['Total'].sum().reset_index()
+
+                if not cust_yearly.empty:
+                    fig_year = px.bar(
+                        cust_yearly, x="Year", y="Total", color="Customer", barmode='group',
+                        title="Yearly Purchase Summary",
+                        color_discrete_sequence=px.colors.qualitative.Prism
+                    )
+                    fig_year.update_traces(
+                        hovertemplate='<b>%{x}</b><br>Customer: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
+                    )
+                    apply_chart_theme(fig_year, title="Annual Purchase Summary", height=400)
+                    st.plotly_chart(fig_year, use_container_width=True, key='yearly_purchase_overview')
+                else:
+                    st.info("No yearly data available for selected customers/date range.")
+
+                # Monthly Trend (Line Chart)
+                st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrow-trend-up" style="color:#3B82F6;"></i> Monthly Purchase Trend</h3>', unsafe_allow_html=True)
+                cust_purchase['Month'] = cust_purchase['Issue Date'].dt.to_period('M').astype(str)
+                cust_monthly = cust_purchase.groupby(['Customer', 'Month'])['Total'].sum().reset_index()
+
+                if not cust_monthly.empty:
+                    fig_monthly_cust = px.line(
+                        cust_monthly, x="Month", y="Total", color="Customer", markers=True,
+                        title="Monthly Purchase Trend",
+                        color_discrete_sequence=px.colors.qualitative.Prism
+                    )
+                    fig_monthly_cust.update_traces(
+                        mode='lines+markers',
+                        hovertemplate='<b>%{x}</b><br>Customer: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
+                    )
+                    apply_chart_theme(fig_monthly_cust, title="Monthly Purchase History", height=450)
+                    st.plotly_chart(fig_monthly_cust, use_container_width=True, key='monthly_purchase_overview')
+                else:
+                    st.info("No monthly data available for selected customers/date range.")
+
+            else:
+                st.info("No customers found for the selected filters.")
         
         with tab2:
             st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-calendar-days" style="color:#3B82F6;"></i> Quarter Analysis</h3>', unsafe_allow_html=True)
@@ -1427,103 +1710,138 @@ if all_files_uploaded:
             fig_quarter.update_traces(
                 hovertemplate='<b>%{x}</b><br>Branch: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
             )
-            st.plotly_chart(fig_quarter, use_container_width=True)
+            st.plotly_chart(fig_quarter, use_container_width=True, key='quarter_comparison')
+            
+            # --- Quarter Selection Analysis ---
+            st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-filter" style="color:#3B82F6;"></i> Select Specific Quarter(s)</h3>', unsafe_allow_html=True)
+            
+            # Option to select specific quarters
+            all_quarters = sorted(quarter_df['Quarter'].unique().tolist())
+            selected_quarters = st.multiselect("Select Specific Quarter(s)", all_quarters)
+            
+            # Filter data based on quarter selection
+            quarter_filtered_df = quarter_df.copy()
+            
+            # Apply specific quarter filter if selected
+            if selected_quarters:
+                quarter_filtered_df = quarter_filtered_df[quarter_filtered_df['Quarter'].isin(selected_quarters)]
+            
+            if not quarter_filtered_df.empty:
+                st.write(f"**Detailed Sales for Selected Quarter(s)**")
+                display_quarter_df = quarter_filtered_df[['Branch', 'Financial Year', 'Quarter', 'Total']].sort_values(['Branch', 'Financial Year', 'Quarter'])
+                
+                # Optimized rendering for large dataframe
+                st.dataframe(
+                    display_quarter_df,
+                    column_config={
+                        "Total": st.column_config.NumberColumn(
+                            "Total Sales",
+                            format=f"{st.session_state.config['currency_symbol']}%.2f"
+                        )
+                    },
+                    use_container_width=True,
+                    height=400
+                )
+                
+                total_sales_for_quarters = quarter_filtered_df['Total'].sum()
+                st.metric(label=f"Total Sales for Selected Quarter(s)", value=format_currency(total_sales_for_quarters))
+                
+                # Bar chart for selected quarters
+                st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-chart-column" style="color:#3B82F6;"></i> Sales Trend for Selected Quarter(s)</h3>', unsafe_allow_html=True)
+                
+                quarter_agg = quarter_filtered_df.groupby(['Financial Year', 'Quarter', 'Branch'])['Total'].sum().reset_index()
+                fig_selected_quarters = px.bar(
+                    quarter_agg,
+                    x='Quarter',
+                    y='Total',
+                    color='Branch',
+                    facet_col='Financial Year',
+                    barmode='group',
+                    title='Sales by Quarter',
+                    color_discrete_sequence=px.colors.qualitative.Prism
+                )
+                apply_chart_theme(fig_selected_quarters, title="Selected Quarter(s) Sales", height=400)
+                fig_selected_quarters.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+                fig_selected_quarters.update_traces(
+                    hovertemplate='<b>%{x}</b><br>Branch: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
+                )
+                st.plotly_chart(fig_selected_quarters, use_container_width=True, key='selected_quarters_chart')
+            else:
+                st.warning("⚠️ No data available for the selected quarter(s).")
         
         with tab3:
             st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-calendar-week" style="color:#3B82F6;"></i> Week-wise Analysis</h3>', unsafe_allow_html=True)
             
-    if not filtered_historical_df.empty:
-        # --- 2. Enhanced Quarter/Week Range Analysis ---
-        st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-filter" style="color:#3B82F6;"></i> Quarter / Week Range Analysis</h3>', unsafe_allow_html=True)
+            # --- Enhanced Week Range Analysis ---
+            st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-filter" style="color:#3B82F6;"></i> Week Range Analysis</h3>', unsafe_allow_html=True)
 
-        # Dynamically generate quarter options from configuration
-        quarters_config = st.session_state.config['quarters']
-        quarter_options = ["All Quarters"]
-        quarter_mapping = {}
-        for q_name, (start, end) in quarters_config.items():
-            display_name = f"{q_name} (Weeks {start}-{end})"
-            quarter_options.append(display_name)
-            quarter_mapping[display_name] = (start, end)
-        
-        selected_quarters_display = st.multiselect("Select Quarter(s)", quarter_options, default=["All Quarters"])
+            # Option to select specific week ranges
+            all_weeks = sorted(filtered_historical_df['Week'].unique().tolist())
+            selected_weeks = st.multiselect("Select Specific Week(s)", all_weeks)
 
-        # Option to select specific week ranges
-        all_weeks = sorted(filtered_historical_df['Week'].unique().tolist())
-        selected_weeks = st.multiselect("Or, Select Specific Week(s)", all_weeks)
+            # Filter data based on week range selection
+            quarter_week_filtered_df = filtered_historical_df.copy()
 
-        # Filter data based on quarter or week range selection
-        quarter_week_filtered_df = filtered_historical_df.copy()
+            # Apply specific week filter if selected
+            if selected_weeks:
+                quarter_week_filtered_df = quarter_week_filtered_df[quarter_week_filtered_df['Week'].isin(selected_weeks)]
 
-        # Apply quarter filter if selected
-        if "All Quarters" not in selected_quarters_display:
-            quarter_weeks = []
-            for q_display in selected_quarters_display:
-                start_week, end_week = quarter_mapping[q_display]
-                quarter_weeks.extend(range(start_week, end_week + 1))
-            quarter_week_filtered_df = quarter_week_filtered_df[quarter_week_filtered_df['Week'].isin(quarter_weeks)]
+            if not quarter_week_filtered_df.empty:
+                st.write(f"**Detailed Sales for Selected Range**")
+                display_quarter_week_df = quarter_week_filtered_df[['Branch', 'Financial Year', 'Week', 'Total']].sort_values(['Branch', 'Financial Year', 'Week'])
+                
+                # Optimized rendering for large dataframe
+                st.dataframe(
+                    display_quarter_week_df,
+                    column_config={
+                        "Total": st.column_config.NumberColumn(
+                            "Total Sales",
+                            format=f"{st.session_state.config['currency_symbol']}%.2f"
+                        ),
+                        "Week": st.column_config.NumberColumn("Week #", format="%d")
+                    },
+                    use_container_width=True,
+                    height=400
+                )
 
-        # Apply specific week filter if selected (overrides quarter if both selected)
-        if selected_weeks:
-            quarter_week_filtered_df = quarter_week_filtered_df[quarter_week_filtered_df['Week'].isin(selected_weeks)]
+                total_sales_for_range = quarter_week_filtered_df['Total'].sum()
+                st.metric(label=f"Total Sales for Selected Range", value=format_currency(total_sales_for_range))
 
-        if not quarter_week_filtered_df.empty:
-            st.write(f"**Detailed Sales for Selected Range**")
-            display_quarter_week_df = quarter_week_filtered_df[['Branch', 'Financial Year', 'Week', 'Total']].sort_values(['Branch', 'Financial Year', 'Week'])
-            
-            # Optimized rendering for large dataframe
-            st.dataframe(
-                display_quarter_week_df,
-                column_config={
-                    "Total": st.column_config.NumberColumn(
-                        "Total Sales",
-                        format=f"{st.session_state.config['currency_symbol']}%.2f"
+                # Line chart for selected week range
+                st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-chart-area" style="color:#3B82F6;"></i> Sales Trend for Selected Range</h3>', unsafe_allow_html=True)
+                fig_quarter_week_trend = px.line(
+                    quarter_week_filtered_df,
+                    x='Week',
+                    y='Total',
+                    color='Branch',
+                    line_dash='Financial Year',
+                    markers=True,
+                    title='Sales Trend by Week for Selected Range',
+                    color_discrete_sequence=px.colors.qualitative.Prism
+                )
+                apply_chart_theme(fig_quarter_week_trend, title="Sales Trend by Week", height=450)
+                # Use a compact vertical legend to avoid the large horizontal legend
+                # squashing the chart area when many Branch × Financial Year combinations exist
+                fig_quarter_week_trend.update_layout(
+                    legend=dict(
+                        orientation="v",
+                        yanchor="top",
+                        y=1,
+                        xanchor="left",
+                        x=1.01,
+                        font=dict(size=10),
+                        title=dict(text="Branch, Financial Year", font=dict(size=11))
                     ),
-                    "Week": st.column_config.NumberColumn("Week #", format="%d")
-                },
-                use_container_width=True,
-                height=400
-            )
+                    margin=dict(r=220)  # make room for the vertical legend
+                )
+                fig_quarter_week_trend.update_traces(
+                    hovertemplate='<b>Week %{x}</b><br>%{fullData.name}<br>$%{y:,.0f}<extra></extra>'
+                )
+                fig_quarter_week_trend.update_xaxes(dtick=1)
+                st.plotly_chart(fig_quarter_week_trend, use_container_width=True, key='week_trend_tab3')
 
-            total_sales_for_range = quarter_week_filtered_df['Total'].sum()
-            st.metric(label=f"Total Sales for Selected Range", value=format_currency(total_sales_for_range))
-
-            # Line chart for selected week range/quarter
-            st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-chart-area" style="color:#3B82F6;"></i> Sales Trend for Selected Range</h3>', unsafe_allow_html=True)
-            fig_quarter_week_trend = px.line(
-                quarter_week_filtered_df,
-                x='Week',
-                y='Total',
-                color='Branch',
-                line_dash='Financial Year',
-                markers=True,
-                title='Sales Trend by Week for Selected Range',
-                color_discrete_sequence=px.colors.qualitative.Prism
-            )
-            apply_chart_theme(fig_quarter_week_trend, title="Sales Trend by Week", height=450)
-            # Use a compact vertical legend to avoid the large horizontal legend
-            # squashing the chart area when many Branch × Financial Year combinations exist
-            fig_quarter_week_trend.update_layout(
-                legend=dict(
-                    orientation="v",
-                    yanchor="top",
-                    y=1,
-                    xanchor="left",
-                    x=1.01,
-                    font=dict(size=10),
-                    title=dict(text="Branch, Financial Year", font=dict(size=11))
-                ),
-                margin=dict(r=220)  # make room for the vertical legend
-            )
-            fig_quarter_week_trend.update_traces(
-                hovertemplate='<b>Week %{x}</b><br>%{fullData.name}<br>$%{y:,.0f}<extra></extra>'
-            )
-            fig_quarter_week_trend.update_xaxes(dtick=1)
-            st.plotly_chart(fig_quarter_week_trend, use_container_width=True)
-
-        else:
-            st.info("No sales data available for the selected quarter(s) or week range based on current filters.")
-
-        st.markdown("---") # Separator
+            else:
+                st.info("No sales data available for the selected week range based on current filters.")
 
         with tab4:
             st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-scale-balanced" style="color:#3B82F6;"></i> Comparative Analysis</h3>', unsafe_allow_html=True)
@@ -1589,7 +1907,7 @@ if all_files_uploaded:
                     fig_comparison.update_traces(
                         hovertemplate='<b>Week %{x}</b><br>%{fullData.name}<br>$%{y:,.0f}<extra></extra>'
                     )
-                    st.plotly_chart(fig_comparison, use_container_width=True)
+                    st.plotly_chart(fig_comparison, use_container_width=True, key='year_comparison')
                     
                     # Show detailed comparison table
                     with st.expander("View Detailed Comparison Table"):
@@ -1607,6 +1925,183 @@ if all_files_uploaded:
                     st.warning("Please select two different years for comparison.")
             else:
                 st.info("Need at least 2 financial years for comparative analysis.")
+        
+        with tab5:
+            st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-users" style="color:#3B82F6;"></i> Customer Analysis</h3>', unsafe_allow_html=True)
+            
+            # ---- Dropping & Rising Customers ---- #
+            st.markdown('<h2><i class="fa-solid fa-users" style="color:#3B82F6;margin-right:0.4rem;"></i>Customer Trends <span style="font-size:0.9rem;color:#64748B;font-weight:500;">(Drop vs Rise)</span></h2>', unsafe_allow_html=True)
+
+            customer_sales = df[df['Branch'].isin(branch)].groupby(['Customer', 'Year'])['Total'].sum().reset_index()
+            sales_pivot = customer_sales.pivot(index='Customer', columns='Year', values='Total').fillna(0)
+
+            years = sorted(sales_pivot.columns)
+            year_window = st.session_state.config['year_comparison_window']
+            
+            if len(years) >= year_window:
+                # Compare the most recent year with the average of previous years based on window
+                recent_years = years[-year_window:]
+                current_year = recent_years[-1]
+                previous_year = recent_years[-2]
+                
+                sales_pivot['Drop?'] = sales_pivot[current_year] < sales_pivot[previous_year]
+                sales_pivot['Rise?'] = sales_pivot[current_year] > sales_pivot[previous_year]
+
+                dropping_customers = sales_pivot[sales_pivot['Drop?']].reset_index()
+                rising_customers = sales_pivot[sales_pivot['Rise?']].reset_index()
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f'<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrow-trend-down" style="color:#EF4444;"></i> Dropping Customers ({previous_year} → {current_year})</h3>', unsafe_allow_html=True)
+                    display_cols = ['Customer'] + [previous_year, current_year]
+                    st.dataframe(
+                        apply_table_style(dropping_customers[display_cols], format_cols=display_cols[1:]),
+                        use_container_width=True
+                    )
+
+                with col2:
+                    st.markdown(f'<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrow-trend-up" style="color:#10B981;"></i> Rising Customers ({previous_year} → {current_year})</h3>', unsafe_allow_html=True)
+                    st.dataframe(
+                        apply_table_style(rising_customers[display_cols], format_cols=display_cols[1:]),
+                        use_container_width=True
+                    )
+            else:
+                st.info(f"Not enough years for drop/rise analysis. Need at least {year_window} years of data.")
+
+            # ---- Customer Purchase View ---- #
+            st.markdown('<h2><i class="fa-solid fa-receipt" style="color:#3B82F6;margin-right:0.4rem;"></i>Customer-wise Purchase Detail</h2>', unsafe_allow_html=True)
+
+            # Multiselect Customer - Check for Customer Name column
+            # Find customer name column if it exists
+            customer_name_col = None
+            for col in filtered_df.columns:
+                if 'customer' in col.lower() and 'name' in col.lower():
+                    customer_name_col = col
+                    break
+            
+            if customer_name_col and customer_name_col in filtered_df.columns:
+                # Create a mapping between Customer ID and Customer Name
+                customer_mapping = filtered_df[['Customer', customer_name_col]].drop_duplicates()
+                customer_mapping = customer_mapping[customer_mapping[customer_name_col].notna()]
+                
+                # Create display options (Customer Name)
+                display_options = sorted(customer_mapping[customer_name_col].unique())
+                
+                selected_customer_names = st.multiselect(
+                    "Select Customer(s) to Analyze",
+                    options=display_options,
+                    default=display_options[:1] if len(display_options) > 0 else [],
+                    key='customer_tab5'
+                )
+                
+                # Map selected names back to Customer IDs
+                selected_customers = customer_mapping[
+                    customer_mapping[customer_name_col].isin(selected_customer_names)
+                ]['Customer'].tolist()
+            else:
+                # Fallback to Customer ID if no Customer Name column exists
+                cust_df = filtered_df.groupby(['Customer', 'Year'])['Total'].sum().reset_index()
+                selected_customers = st.multiselect(
+                    "Select Customer(s) to Analyze",
+                    options=sorted(cust_df['Customer'].unique()),
+                    default=cust_df['Customer'].unique()[:1],
+                    key='customer_tab5'
+                )
+            
+            if selected_customers and len(selected_customers) > 0:
+
+                # Date Range Filter
+                cust_date_range = st.date_input(
+                    "Select Date Range for Purchase Analysis",
+                    [filtered_df['Issue Date'].min(), filtered_df['Issue Date'].max()],
+                    key='date_range_tab5'
+                )
+                cust_start_date = pd.to_datetime(cust_date_range[0])
+                cust_end_date = pd.to_datetime(cust_date_range[1])
+
+                # Filter based on selection
+                cust_purchase = filtered_df[
+                    (filtered_df['Customer'].isin(selected_customers)) &
+                    (filtered_df['Issue Date'].between(cust_start_date, cust_end_date))
+                ]
+
+                # Show drop warnings
+                if 'dropping_customers' in locals() and 'previous_year' in locals() and 'current_year' in locals():
+                    for cust in selected_customers:
+                        if cust in dropping_customers['Customer'].values:
+                            # Optimized warning
+                            st.warning(f"{cust} is a dropping customer (sales declined from {previous_year} to {current_year}).")
+
+                # Show raw purchase records
+                st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-table-list" style="color:#3B82F6;"></i> Filtered Purchase Records</h3>', unsafe_allow_html=True)
+                display_cust_purchase = cust_purchase[['Customer', 'Issue Date', 'Branch', 'Invoice ID', 'Total']]
+                
+                # Optimized rendering: Using native column configuration for performance
+                st.dataframe(
+                    display_cust_purchase,
+                    column_config={
+                        "Issue Date": st.column_config.DateColumn(
+                            "Date",
+                            format="DD/MM/YYYY" if st.session_state.config['date_format'] == 'dayfirst' else "MM/DD/YYYY"
+                        ),
+                        "Total": st.column_config.NumberColumn(
+                            "Total Purchase",
+                            format=f"{st.session_state.config['currency_symbol']}%.2f"
+                        ),
+                        "Customer": "Customer Name",
+                        "Branch": "Branch",
+                        "Invoice ID": "Invoice"
+                    },
+                    use_container_width=True,
+                    height=500,
+                    hide_index=True
+                )
+
+                # Calculate and display the total sum of purchases
+                total_filtered_purchase = cust_purchase['Total'].sum()
+                st.metric(label="Total Purchase for Filtered Records", value=format_currency(total_filtered_purchase))
+
+                # Year-wise Total Purchases (Bar Chart)
+                st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-chart-column" style="color:#3B82F6;"></i> Year-wise Purchase Totals</h3>', unsafe_allow_html=True)
+                cust_yearly = cust_purchase.groupby(['Customer', 'Year'])['Total'].sum().reset_index()
+
+                if not cust_yearly.empty:
+                    fig_year = px.bar(
+                        cust_yearly, x="Year", y="Total", color="Customer", barmode='group',
+                        title="Yearly Purchase Summary",
+                        color_discrete_sequence=px.colors.qualitative.Prism
+                    )
+                    fig_year.update_traces(
+                        hovertemplate='<b>%{x}</b><br>Customer: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
+                    )
+                    apply_chart_theme(fig_year, title="Annual Purchase Summary", height=400)
+                    st.plotly_chart(fig_year, use_container_width=True, key='yearly_purchase_customer_tab')
+                else:
+                    st.info("No yearly data available for selected customers/date range.")
+
+                # Monthly Trend (Line Chart)
+                st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrow-trend-up" style="color:#3B82F6;"></i> Monthly Purchase Trend</h3>', unsafe_allow_html=True)
+                cust_purchase['Month'] = cust_purchase['Issue Date'].dt.to_period('M').astype(str)
+                cust_monthly = cust_purchase.groupby(['Customer', 'Month'])['Total'].sum().reset_index()
+
+                if not cust_monthly.empty:
+                    fig_monthly = px.line(
+                        cust_monthly, x="Month", y="Total", color="Customer", markers=True,
+                        title="Monthly Purchase Trend",
+                        color_discrete_sequence=px.colors.qualitative.Prism
+                    )
+                    fig_monthly.update_traces(
+                        mode='lines+markers',
+                        hovertemplate='<b>%{x}</b><br>Customer: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
+                    )
+                    apply_chart_theme(fig_monthly, title="Monthly Purchase History", height=450)
+                    st.plotly_chart(fig_monthly, use_container_width=True, key='monthly_purchase_customer_tab')
+                else:
+                    st.info("No monthly data available for selected customers/date range.")
+
+            else:
+                st.info("No customers found for the selected filters.")
+    
     else:
         # Show message when no historical data is available
         st.info("""
@@ -1620,166 +2115,6 @@ if all_files_uploaded:
         
         Your Excel file should contain sheets named 'WA', 'QLD', and 'NSW' with historical sales data.
         """)
-
-    # ---- Monthly Sales ---- #
-    # ---- Monthly Sales ---- #
-    st.markdown('<h2><i class="fa-solid fa-chart-area" style="color:#3B82F6;margin-right:0.4rem;"></i>Monthly Branch Sales</h2>', unsafe_allow_html=True)
-    monthly_sales = filtered_df.groupby(['Month', 'Branch'])['Total'].sum().reset_index()
-
-    fig_month = px.line(
-        monthly_sales, x="Month", y="Total", color="Branch", markers=True,
-        title="Monthly Sales by Branch",
-        color_discrete_sequence=px.colors.qualitative.Prism
-    )
-    fig_month.update_traces(
-        mode='lines+markers',
-        hovertemplate='<b>%{x}</b><br>Branch: %{fullData.name}<br>Sales: $%{y:,.0f}<extra></extra>'
-    )
-    apply_chart_theme(fig_month, title="Monthly Sales Trend", height=450)
-    st.plotly_chart(fig_month, use_container_width=True)
-
-
-    # ---- Dropping & Rising Customers ---- #
-    st.markdown('<h2><i class="fa-solid fa-users" style="color:#3B82F6;margin-right:0.4rem;"></i>Customer Trends <span style="font-size:0.9rem;color:#64748B;font-weight:500;">(Drop vs Rise)</span></h2>', unsafe_allow_html=True)
-
-    customer_sales = df[df['Branch'].isin(branch)].groupby(['Customer', 'Year'])['Total'].sum().reset_index()
-    sales_pivot = customer_sales.pivot(index='Customer', columns='Year', values='Total').fillna(0)
-
-    years = sorted(sales_pivot.columns)
-    year_window = st.session_state.config['year_comparison_window']
-    
-    if len(years) >= year_window:
-        # Compare the most recent year with the average of previous years based on window
-        recent_years = years[-year_window:]
-        current_year = recent_years[-1]
-        previous_year = recent_years[-2]
-        
-        sales_pivot['Drop?'] = sales_pivot[current_year] < sales_pivot[previous_year]
-        sales_pivot['Rise?'] = sales_pivot[current_year] > sales_pivot[previous_year]
-
-        dropping_customers = sales_pivot[sales_pivot['Drop?']].reset_index()
-        rising_customers = sales_pivot[sales_pivot['Rise?']].reset_index()
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown(f'<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrow-trend-down" style="color:#EF4444;"></i> Dropping Customers ({previous_year} → {current_year})</h3>', unsafe_allow_html=True)
-            display_cols = ['Customer'] + [previous_year, current_year]
-            st.dataframe(
-                apply_table_style(dropping_customers[display_cols], format_cols=display_cols[1:]),
-                use_container_width=True
-            )
-
-        with col2:
-            st.markdown(f'<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrow-trend-up" style="color:#10B981;"></i> Rising Customers ({previous_year} → {current_year})</h3>', unsafe_allow_html=True)
-            st.dataframe(
-                apply_table_style(rising_customers[display_cols], format_cols=display_cols[1:]),
-                use_container_width=True
-            )
-    else:
-        st.info(f"Not enough years for drop/rise analysis. Need at least {year_window} years of data.")
-
-    # ---- Customer Purchase View ---- #
-    st.markdown('<h2><i class="fa-solid fa-receipt" style="color:#3B82F6;margin-right:0.4rem;"></i>Customer-wise Purchase Detail</h2>', unsafe_allow_html=True)
-
-    # Multiselect Customer
-    cust_df = filtered_df.groupby(['Customer', 'Year'])['Total'].sum().reset_index()
-    if not cust_df.empty:
-        selected_customers = st.multiselect(
-            "Select Customer(s) to Analyze",
-            options=cust_df['Customer'].unique(),
-            default=cust_df['Customer'].unique()[:1]
-        )
-
-        # Date Range Filter
-        cust_date_range = st.date_input(
-            "Select Date Range for Purchase Analysis",
-            [filtered_df['Issue Date'].min(), filtered_df['Issue Date'].max()]
-        )
-        cust_start_date = pd.to_datetime(cust_date_range[0])
-        cust_end_date = pd.to_datetime(cust_date_range[1])
-
-        # Filter based on selection
-        cust_purchase = filtered_df[
-            (filtered_df['Customer'].isin(selected_customers)) &
-            (filtered_df['Issue Date'].between(cust_start_date, cust_end_date))
-        ]
-
-        # Show drop warnings
-        if 'dropping_customers' in locals() and 'previous_year' in locals() and 'current_year' in locals():
-            for cust in selected_customers:
-                if cust in dropping_customers['Customer'].values:
-                    # Optimized warning
-                    st.warning(f"{cust} is a dropping customer (sales declined from {previous_year} to {current_year}).")
-
-        # Show raw purchase records
-        st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-table-list" style="color:#3B82F6;"></i> Filtered Purchase Records</h3>', unsafe_allow_html=True)
-        display_cust_purchase = cust_purchase[['Customer', 'Issue Date', 'Branch', 'Invoice ID', 'Total']]
-        
-        # Optimized rendering: Using native column configuration for performance
-        st.dataframe(
-            display_cust_purchase,
-            column_config={
-                "Issue Date": st.column_config.DateColumn(
-                    "Date",
-                    format="DD/MM/YYYY" if st.session_state.config['date_format'] == 'dayfirst' else "MM/DD/YYYY"
-                ),
-                "Total": st.column_config.NumberColumn(
-                    "Total Purchase",
-                    format=f"{st.session_state.config['currency_symbol']}%.2f"
-                ),
-                "Customer": "Customer Name",
-                "Branch": "Branch",
-                "Invoice ID": "Invoice"
-            },
-            use_container_width=True,
-            height=500,
-            hide_index=True
-        )
-
-        # Calculate and display the total sum of purchases
-        total_filtered_purchase = cust_purchase['Total'].sum()
-        st.metric(label="Total Purchase for Filtered Records", value=format_currency(total_filtered_purchase))
-
-        # Year-wise Total Purchases (Bar Chart)
-        st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-chart-column" style="color:#3B82F6;"></i> Year-wise Purchase Totals</h3>', unsafe_allow_html=True)
-        cust_yearly = cust_purchase.groupby(['Customer', 'Year'])['Total'].sum().reset_index()
-
-        if not cust_yearly.empty:
-            fig_year = px.bar(
-                cust_yearly, x="Year", y="Total", color="Customer", barmode='group',
-                title="Yearly Purchase Summary",
-                color_discrete_sequence=px.colors.qualitative.Prism
-            )
-            fig_year.update_traces(
-                hovertemplate='<b>%{x}</b><br>Customer: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
-            )
-            apply_chart_theme(fig_year, title="Annual Purchase Summary", height=400)
-            st.plotly_chart(fig_year, use_container_width=True)
-        else:
-            st.info("No yearly data available for selected customers/date range.")
-
-        # Monthly Trend (Line Chart)
-        st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrow-trend-up" style="color:#3B82F6;"></i> Monthly Purchase Trend</h3>', unsafe_allow_html=True)
-        cust_purchase['Month'] = cust_purchase['Issue Date'].dt.to_period('M').astype(str)
-        cust_monthly = cust_purchase.groupby(['Customer', 'Month'])['Total'].sum().reset_index()
-
-        if not cust_monthly.empty:
-            fig_monthly = px.line(
-                cust_monthly, x="Month", y="Total", color="Customer", markers=True,
-                title="Monthly Purchase Trend",
-                color_discrete_sequence=px.colors.qualitative.Prism
-            )
-            fig_monthly.update_traces(
-                mode='lines+markers',
-                hovertemplate='<b>%{x}</b><br>Customer: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
-            )
-            apply_chart_theme(fig_monthly, title="Monthly Purchase History", height=450)
-            st.plotly_chart(fig_monthly, use_container_width=True)
-        else:
-            st.info("No monthly data available for selected customers/date range.")
-
-    else:
-        st.info("No customers found for the selected filters.")
 
 else:
     # --- 5. Phase 5: Enhanced Empty State ---
