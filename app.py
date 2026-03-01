@@ -7,8 +7,13 @@ st.set_page_config(page_title="Sales Analytics Dashboard", layout="wide", initia
 
 # Load Custom CSS
 def load_css(file_name):
-    with open(file_name) as f:
-        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+    try:
+        with open(file_name) as f:
+            st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+    except FileNotFoundError:
+        st.warning(f"CSS file not found: {file_name}")
+    except Exception as e:
+        st.warning(f"Error loading CSS: {e}")
 
 load_css("assets/style.css")
 # Inject FontAwesome 6 Free
