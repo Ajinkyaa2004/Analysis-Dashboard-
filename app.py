@@ -7,47 +7,544 @@ import plotly.express as px
 
 st.set_page_config(layout="wide")
 
+# ========================================
+# CONFIGURATION SECTION
+# ========================================
+# Initialize session state for configuration if not exists
+if 'config' not in st.session_state:
+    st.session_state.config = {
+        'branches': ['NSW', 'QLD', 'WA'],
+        'excel_sheet_names': ['WA', 'QLD', 'NSW'],
+        'csv_columns': [
+            "Entity Name", "Branch Region", "Branch", "Division", "Due Date", 
+            "Top Level Customer ID", "Top Level Customer Name", "Customer ID", 
+            "Customer", "Billing Group ID", "Billing Group", "Invoice ID", 
+            "Invoice #", "Issue Date", "Total", "Outstanding", "Delivery", "Status"
+        ],
+        'date_format': 'dayfirst',  # 'dayfirst' or 'monthfirst'
+        'currency_symbol': '$',
+        'week_count': 52,
+        'quarters': {
+            'Q1': (1, 13),
+            'Q2': (14, 26),
+            'Q3': (27, 39),
+            'Q4': (40, 52)
+        },
+        'year_comparison_window': 2,
+        'csv_has_header': False,
+        'excel_header_row': 0,
+        'excel_data_start_row': 2,
+        'chart_heights': {'default': 500, 'quarter': 400},
+        'column_mappings': {
+            'Customer': 'Customer',
+            'Issue Date': 'Issue Date',
+            'Total': 'Total',
+            'Branch': 'Branch',
+            'Invoice ID': 'Invoice ID',
+            'Outstanding': 'Outstanding'
+        }
+    }
+
+# Helper function for currency formatting
+def format_currency(value, decimals=2):
+    """Format a number as currency using the configured currency symbol"""
+    currency_symbol = st.session_state.config['currency_symbol']
+    return f"{currency_symbol}{value:,.{decimals}f}"
+
+# ========================================
+# AUTO-DETECTION FUNCTIONS
+# ========================================
+
+def smart_column_mapper(columns):
+    """
+    Intelligently map CSV columns to required fields.
+    Returns a dictionary mapping required fields to actual column names.
+    """
+    columns_lower = [str(col).lower().strip() for col in columns]
+    mapping = {}
+    
+    # Define patterns for each required field
+    patterns = {
+        'Customer': [
+            'customer', 'customer name', 'cust', 'client', 
+            'customer id', 'cust id', 'client name', 'account name'
+        ],
+        'Issue Date': [
+            'issue date', 'date', 'invoice date', 'sale date', 
+            'transaction date', 'order date', 'issuedate', 'inv date'
+        ],
+        'Total': [
+            'total', 'amount', 'sales', 'revenue', 'value', 
+            'total amount', 'sale amount', 'grand total', 'net total'
+        ],
+        'Branch': [
+            'branch', 'location', 'store', 'region', 'office', 'site'
+        ],
+        'Invoice ID': [
+            'invoice id', 'invoice #', 'invoice', 'inv id', 'bill id',
+            'transaction id', 'order id', 'reference'
+        ],
+        'Outstanding': [
+            'outstanding', 'balance', 'due', 'pending', 'unpaid'
+        ]
+    }
+    
+    # Try to find best match for each required field
+    for required_field, search_patterns in patterns.items():
+        best_match = None
+        best_score = 0
+        
+        for i, col_lower in enumerate(columns_lower):
+            for pattern in search_patterns:
+                # Exact match (highest priority)
+                if col_lower == pattern:
+                    best_match = columns[i]
+                    best_score = 100
+                    break
+                # Contains pattern
+                elif pattern in col_lower:
+                    score = 50 + (len(pattern) / len(col_lower)) * 50
+                    if score > best_score:
+                        best_match = columns[i]
+                        best_score = score
+            
+            if best_score == 100:
+                break
+        
+        if best_match:
+            mapping[required_field] = best_match
+    
+    return mapping
+
+def auto_detect_csv_structure(uploaded_files):
+    """Auto-detect CSV structure from uploaded files"""
+    detected_config = {}
+    
+    if not uploaded_files or len(uploaded_files) == 0:
+        return detected_config
+    
+    # Get first non-None file for detection
+    sample_file = next((f for f in uploaded_files if f is not None), None)
+    if sample_file is None:
+        return detected_config
+    
+    try:
+        # Reset file pointer
+        sample_file.seek(0)
+        
+        # Try to read with header first
+        df_with_header = pd.read_csv(sample_file, nrows=5)
+        sample_file.seek(0)
+        
+        # Check if first row looks like headers (mostly strings, no numbers)
+        first_row_values = df_with_header.iloc[0] if len(df_with_header) > 0 else []
+        numeric_count = sum(pd.to_numeric(first_row_values, errors='coerce').notna())
+        has_header = numeric_count < len(first_row_values) * 0.3  # If less than 30% are numbers, likely headers
+        
+        if has_header:
+            detected_config['csv_has_header'] = True
+            detected_config['csv_columns'] = df_with_header.columns.tolist()
+            # Perform intelligent column mapping
+            detected_config['column_mappings'] = smart_column_mapper(df_with_header.columns.tolist())
+        else:
+            # No header - use default column count
+            sample_file.seek(0)
+            df_no_header = pd.read_csv(sample_file, header=None, nrows=1)
+            num_cols = len(df_no_header.columns)
+            detected_config['csv_has_header'] = False
+            
+            # Intelligently handle column mapping
+            default_columns = st.session_state.config['csv_columns']
+            if num_cols == len(default_columns):
+                # Perfect match - use default columns
+                detected_config['csv_columns'] = default_columns
+                detected_config['column_mappings'] = smart_column_mapper(default_columns)
+            elif num_cols == 18 and len(default_columns) == 19:
+                # Common case: 18 vs 19 columns - use first 18 from defaults
+                detected_config['csv_columns'] = default_columns[:18]
+                detected_config['column_mappings'] = smart_column_mapper(default_columns[:18])
+            elif abs(num_cols - len(default_columns)) <= 2:
+                # Close match - adapt by truncating or using subset
+                cols = default_columns[:num_cols] if num_cols < len(default_columns) else default_columns
+                detected_config['csv_columns'] = cols
+                detected_config['column_mappings'] = smart_column_mapper(cols)
+            else:
+                # Significant mismatch - use generic names
+                detected_config['csv_columns'] = [f"Column_{i+1}" for i in range(num_cols)]
+                detected_config['column_mappings'] = {}  # No mappings for generic columns
+        
+        sample_file.seek(0)
+        
+    except Exception as e:
+        st.warning(f"⚠️ Could not auto-detect CSV structure: {str(e)}")
+    
+    return detected_config
+
+def auto_detect_date_format(uploaded_files):
+    """Auto-detect date format from uploaded CSV files"""
+    if not uploaded_files or len(uploaded_files) == 0:
+        return None
+    
+    sample_file = next((f for f in uploaded_files if f is not None), None)
+    if sample_file is None:
+        return None
+    
+    try:
+        sample_file.seek(0)
+        df = pd.read_csv(sample_file, nrows=10)
+        sample_file.seek(0)
+        
+        # Look for date columns (common names)
+        date_columns = [col for col in df.columns if any(word in str(col).lower() for word in ['date', 'issue', 'due'])]
+        
+        if date_columns:
+            date_col = date_columns[0]
+            sample_dates = df[date_col].dropna().head(5)
+            
+            # Try both formats
+            dayfirst_success = 0
+            monthfirst_success = 0
+            
+            for date_str in sample_dates:
+                try:
+                    pd.to_datetime(date_str, dayfirst=True)
+                    dayfirst_success += 1
+                except:
+                    pass
+                
+                try:
+                    pd.to_datetime(date_str, dayfirst=False)
+                    monthfirst_success += 1
+                except:
+                    pass
+            
+            # If dates have day > 12, they must be dayfirst
+            for date_str in sample_dates:
+                parts = str(date_str).split('/')
+                if len(parts) >= 2:
+                    try:
+                        first_part = int(parts[0])
+                        if first_part > 12:
+                            return 'dayfirst'
+                    except:
+                        pass
+            
+            return 'dayfirst' if dayfirst_success >= monthfirst_success else 'monthfirst'
+    
+    except Exception as e:
+        pass
+    
+    return None
+
+def auto_detect_excel_sheets(uploaded_excel):
+    """Auto-detect sheet names from uploaded Excel file"""
+    if uploaded_excel is None:
+        return None
+    
+    try:
+        uploaded_excel.seek(0)
+        excel_file = pd.ExcelFile(uploaded_excel)
+        sheet_names = excel_file.sheet_names
+        uploaded_excel.seek(0)
+        return sheet_names
+    except Exception as e:
+        st.warning(f"⚠️ Could not read Excel sheets: {str(e)}")
+        return None
+
+def auto_detect_week_count(uploaded_excel, sheet_names):
+    """Auto-detect week count from Excel historical data"""
+    if uploaded_excel is None or not sheet_names:
+        return None
+    
+    try:
+        uploaded_excel.seek(0)
+        # Read first sheet
+        df = pd.read_excel(uploaded_excel, sheet_name=sheet_names[0], header=None)
+        uploaded_excel.seek(0)
+        
+        # Look for rows containing "Week"
+        week_rows = df[df.iloc[:, 0].astype(str).str.contains(r'Week\s*\d+', na=False, regex=True)]
+        if len(week_rows) > 0:
+            # Extract week numbers
+            week_numbers = []
+            for val in week_rows.iloc[:, 0]:
+                match = pd.Series([val]).astype(str).str.extract(r'Week\s*(\d+)')[0]
+                if not match.empty and not pd.isna(match[0]):
+                    week_numbers.append(int(match[0]))
+            
+            if week_numbers:
+                max_week = max(week_numbers)
+                return max_week
+    except Exception as e:
+        pass
+    
+    return None
+
+def auto_detect_currency(uploaded_files):
+    """Auto-detect currency symbol from data"""
+    if not uploaded_files or len(uploaded_files) == 0:
+        return None
+    
+    sample_file = next((f for f in uploaded_files if f is not None), None)
+    if sample_file is None:
+        return None
+    
+    try:
+        sample_file.seek(0)
+        df = pd.read_csv(sample_file, nrows=10)
+        sample_file.seek(0)
+        
+        # Look for currency columns
+        currency_cols = [col for col in df.columns if any(word in str(col).lower() for word in ['total', 'amount', 'price', 'outstanding'])]
+        
+        if currency_cols:
+            sample_values = df[currency_cols[0]].dropna().head(3).astype(str)
+            for val in sample_values:
+                # Check for currency symbols
+                if '$' in val:
+                    return '$'
+                elif '£' in val:
+                    return '£'
+                elif '€' in val:
+                    return '€'
+                elif '₹' in val:
+                    return '₹'
+    except:
+        pass
+    
+    return None
+
 @st.cache_data
 # ///
 
 # ///
 
 
-def load_data(nsw_file, qld_file, wa_file):
-    columns = [
-        "Entity Name", "Branch Region", "Branch", "Division", "Due Date", 
-        "Top Level Customer ID", "Top Level Customer Name", "Customer ID", 
-        "Customer", "Billing Group ID", "Billing Group", "Invoice ID", 
-        "Invoice #", "Issue Date", "Total", "Outstanding", "Delivery", "Status"
-    ]
-
-    df_nsw = pd.read_csv(nsw_file, names=columns, header=None)
-    df_qld = pd.read_csv(qld_file, names=columns, header=None)
-    df_wa = pd.read_csv(wa_file, names=columns, header=None)
-
-    df_nsw['Branch'] = 'NSW'
-    df_qld['Branch'] = 'QLD'
-    df_wa['Branch'] = 'WA'
-
-    df = pd.concat([df_nsw, df_qld, df_wa], ignore_index=True)
-
+def load_data(branch_files, branch_names, columns, date_format='dayfirst', csv_has_header=False, column_mappings=None):
+    """Load data from multiple branch CSV files with configurable structure and intelligent column mapping"""
+    dfs = []
+    
+    # Default column mappings if not provided
+    if column_mappings is None:
+        column_mappings = {
+            'Customer': 'Customer',
+            'Issue Date': 'Issue Date',
+            'Total': 'Total',
+            'Branch': 'Branch'
+        }
+    
+    for i, (file, branch_name) in enumerate(zip(branch_files, branch_names)):
+        try:
+            if csv_has_header:
+                df = pd.read_csv(file)
+                # Auto-detection succeeded - no warning needed
+            else:
+                # Read without header and check column count
+                df = pd.read_csv(file, header=None)
+                actual_cols = len(df.columns)
+                
+                # If column count matches, use predefined names
+                if actual_cols == len(columns):
+                    df.columns = columns
+                else:
+                    # Auto-adapt: generate column names based on actual structure
+                    if actual_cols == 18 and len(columns) == 19:
+                        # Use first 18 columns from the predefined list
+                        df.columns = columns[:18]
+                    else:
+                        # Use generic column names and show info only
+                        df.columns = [f"Column_{i+1}" for i in range(actual_cols)]
+                        # Only warn if significant mismatch (not just off-by-one)
+                        if abs(actual_cols - len(columns)) > 2:
+                            st.warning(f"⚠️ {branch_name}: Detected {actual_cols} columns (expected {len(columns)}). Using auto-detected structure.")
+            
+            df['Branch'] = branch_name
+            dfs.append(df)
+        except Exception as e:
+            st.error(f"❌ Error loading {branch_name} file: {str(e)}")
+            return None
+    
+    if not dfs:
+        return None
+    
+    df = pd.concat(dfs, ignore_index=True)
     df.columns = df.columns.str.strip()
-    df['Customer'] = df['Customer'].astype(str).str.strip()
+    
+    # Apply intelligent column mappings to create standardized column names
+    # This ensures the dashboard works regardless of the original column names
+    
+    # Map Customer column
+    if 'Customer' in column_mappings and column_mappings['Customer'] in df.columns:
+        if column_mappings['Customer'] != 'Customer':
+            df['Customer'] = df[column_mappings['Customer']].astype(str).str.strip()
+        else:
+            df['Customer'] = df['Customer'].astype(str).str.strip()
+    elif 'Customer' in df.columns:
+        df['Customer'] = df['Customer'].astype(str).str.strip()
+    else:
+        # Create dummy Customer column if not found
+        df['Customer'] = 'Unknown Customer'
+        st.warning("⚠️ Customer column not found. Using default value.")
+    
+    # Map Issue Date column
+    if 'Issue Date' in column_mappings and column_mappings['Issue Date'] in df.columns:
+        date_col = column_mappings['Issue Date']
+        if date_format == 'dayfirst':
+            df['Issue Date'] = pd.to_datetime(df[date_col], dayfirst=True, errors='coerce')
+        else:
+            df['Issue Date'] = pd.to_datetime(df[date_col], errors='coerce')
+    elif 'Issue Date' in df.columns:
+        if date_format == 'dayfirst':
+            df['Issue Date'] = pd.to_datetime(df['Issue Date'], dayfirst=True, errors='coerce')
+        else:
+            df['Issue Date'] = pd.to_datetime(df['Issue Date'], errors='coerce')
+    else:
+        # Create dummy Issue Date if not found
+        df['Issue Date'] = pd.Timestamp.now()
+        st.error("❌ Issue Date column not found. Cannot proceed without date information.")
+        return None
+    
+    # Map Total column
+    if 'Total' in column_mappings and column_mappings['Total'] in df.columns:
+        total_col = column_mappings['Total']
+        df['Total'] = pd.to_numeric(df[total_col].astype(str).str.replace(',', ''), errors='coerce')
+    elif 'Total' in df.columns:
+        df['Total'] = pd.to_numeric(df['Total'].astype(str).str.replace(',', ''), errors='coerce')
+    else:
+        # Create dummy Total if not found
+        df['Total'] = 0.0
+        st.error("❌ Total/Amount column not found. Cannot proceed without sales data.")
+        return None
+    
+    # Ensure Branch column exists and is properly formatted
     df['Branch'] = df['Branch'].astype(str).str.strip()
-    df['Issue Date'] = pd.to_datetime(df['Issue Date'], dayfirst=True, errors='coerce')
+    
+    # Create derived columns for analysis
     df['Year'] = df['Issue Date'].dt.year
     df['Month'] = df['Issue Date'].dt.to_period('M').astype(str)
-    df['Total'] = pd.to_numeric(df['Total'].astype(str).str.replace(',', ''), errors='coerce')
 
     return df.dropna(subset=['Issue Date', 'Total', 'Branch'])
 
-# File upload UI in sidebar
+# ========================================
+# SIDEBAR - CONFIGURATION SETTINGS
+# ========================================
+st.sidebar.title("⚙️ Configuration")
+with st.sidebar.expander("🔧 Advanced Settings (Optional)", expanded=False):
+    st.markdown("**Customize these settings if your data has a different structure**")
+    
+    # Branch configuration
+    st.markdown("##### Branch Names")
+    branch_input = st.text_input(
+        "Enter branch names (comma-separated)", 
+        value=", ".join(st.session_state.config['branches']),
+        help="Default: NSW, QLD, WA"
+    )
+    config_branches = [b.strip() for b in branch_input.split(',') if b.strip()]
+    
+    # Excel sheet names
+    st.markdown("##### Excel Sheet Names")
+    sheet_input = st.text_input(
+        "Enter sheet names (comma-separated)", 
+        value=", ".join(st.session_state.config['excel_sheet_names']),
+        help="Sheet names in your historical Excel file"
+    )
+    config_sheet_names = [s.strip() for s in sheet_input.split(',') if s.strip()]
+    
+    # Date format
+    st.markdown("##### Date Format")
+    date_format_option = st.selectbox(
+        "Date format in CSV files",
+        options=['DD/MM/YYYY (Day First)', 'MM/DD/YYYY (Month First)'],
+        index=0,
+        help="Select the date format used in your CSV files"
+    )
+    config_date_format = 'dayfirst' if 'Day First' in date_format_option else 'monthfirst'
+    
+    # Currency
+    st.markdown("##### Currency Settings")
+    config_currency = st.text_input(
+        "Currency Symbol", 
+        value=st.session_state.config['currency_symbol'],
+        help="Default: $"
+    )
+    
+    # Week count and quarters
+    st.markdown("##### Week & Quarter Settings")
+    config_week_count = st.number_input(
+        "Total Weeks in Year", 
+        min_value=1, 
+        max_value=53, 
+        value=st.session_state.config['week_count'],
+        help="Default: 52"
+    )
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        q1_start = st.number_input("Q1 Start", min_value=1, value=1, key='q1s')
+        q1_end = st.number_input("Q1 End", min_value=1, value=13, key='q1e')
+        q2_start = st.number_input("Q2 Start", min_value=1, value=14, key='q2s')
+        q2_end = st.number_input("Q2 End", min_value=1, value=26, key='q2e')
+    with col2:
+        q3_start = st.number_input("Q3 Start", min_value=1, value=27, key='q3s')
+        q3_end = st.number_input("Q3 End", min_value=1, value=39, key='q3e')
+        q4_start = st.number_input("Q4 Start", min_value=1, value=40, key='q4s')
+        q4_end = st.number_input("Q4 End", min_value=1, value=52, key='q4e')
+    
+    config_quarters = {
+        'Q1': (q1_start, q1_end),
+        'Q2': (q2_start, q2_end),
+        'Q3': (q3_start, q3_end),
+        'Q4': (q4_start, q4_end)
+    }
+    
+    # Year comparison window
+    config_year_window = st.number_input(
+        "Year Comparison Window", 
+        min_value=2, 
+        max_value=10, 
+        value=st.session_state.config['year_comparison_window'],
+        help="Number of years to compare for customer trends (default: 2)"
+    )
+    
+    # CSV header option
+    config_csv_has_header = st.checkbox(
+        "CSV files have header row", 
+        value=st.session_state.config['csv_has_header'],
+        help="Check if your CSV files include column names in the first row"
+    )
+    
+    # Apply button
+    if st.button("💾 Apply Configuration"):
+        st.session_state.config.update({
+            'branches': config_branches,
+            'excel_sheet_names': config_sheet_names,
+            'date_format': config_date_format,
+            'currency_symbol': config_currency,
+            'week_count': config_week_count,
+            'quarters': config_quarters,
+            'year_comparison_window': config_year_window,
+            'csv_has_header': config_csv_has_header
+        })
+        st.success("✅ Configuration updated!")
+        st.rerun()
+
+st.sidebar.markdown("---")
+
+# ========================================
+# SIDEBAR - FILE UPLOAD
+# ========================================
 st.sidebar.title("⬆ Upload Sales Data")
 st.sidebar.markdown("Upload CSV files for each branch:")
 
-uploaded_nsw = st.sidebar.file_uploader("NSW Branch CSV", type=['csv'], key='nsw')
-uploaded_qld = st.sidebar.file_uploader("QLD Branch CSV", type=['csv'], key='qld')
-uploaded_wa = st.sidebar.file_uploader("WA Branch CSV", type=['csv'], key='wa')
+# Dynamic branch file uploaders
+uploaded_branch_files = []
+for branch in st.session_state.config['branches']:
+    uploaded_file = st.sidebar.file_uploader(
+        f"{branch} Branch CSV", 
+        type=['csv'], 
+        key=f'branch_{branch.lower().replace(" ", "_")}'
+    )
+    uploaded_branch_files.append(uploaded_file)
 
 st.sidebar.markdown("---")
 
@@ -55,25 +552,147 @@ st.sidebar.markdown("---")
 st.sidebar.title("📊 Upload Historical Sales Data")
 st.sidebar.markdown("Upload Excel file for annual sales analysis:")
 uploaded_historical = st.sidebar.file_uploader(
-    "Historical Sales Excel (with WA, QLD, NSW sheets)", 
+    f"Historical Sales Excel (with {', '.join(st.session_state.config['excel_sheet_names'])} sheets)", 
     type=['xlsx', 'xls'], 
     key='historical',
-    help="Upload an Excel file containing sheets named 'WA', 'QLD', and 'NSW' with historical sales data"
+    help=f"Upload an Excel file containing sheets named {', '.join(st.session_state.config['excel_sheet_names'])} with historical sales data"
 )
 
 st.sidebar.markdown("---")
 
-# Check if all files are uploaded
-all_files_uploaded = uploaded_nsw is not None and uploaded_qld is not None and uploaded_wa is not None
+# ========================================
+# AUTO-DETECTION & CONFIGURATION UPDATE
+# ========================================
+# Reset auto-detection flags when files are removed
+if not all(f is not None for f in uploaded_branch_files):
+    if 'auto_detected' in st.session_state:
+        del st.session_state.auto_detected
+        
+if uploaded_historical is None:
+    if 'excel_auto_detected' in st.session_state:
+        del st.session_state.excel_auto_detected
+
+# Check if files are uploaded and trigger auto-detection
+all_files_uploaded = all(f is not None for f in uploaded_branch_files)
+
+if all_files_uploaded and 'auto_detected' not in st.session_state:
+    st.session_state.auto_detected = True
+    
+    # Auto-detect configuration from uploaded files
+    detected_updates = {}
+    
+    # Detect CSV structure
+    csv_config = auto_detect_csv_structure(uploaded_branch_files)
+    if csv_config:
+        detected_updates.update(csv_config)
+    
+    # Detect date format
+    date_format = auto_detect_date_format(uploaded_branch_files)
+    if date_format:
+        detected_updates['date_format'] = date_format
+    
+    # Detect currency
+    currency = auto_detect_currency(uploaded_branch_files)
+    if currency:
+        detected_updates['currency_symbol'] = currency
+    
+    # Apply detected updates
+    if detected_updates:
+        st.session_state.config.update(detected_updates)
+        st.sidebar.success("✨ Auto-detected file structure!")
+
+# Auto-detect Excel sheets when historical file is uploaded
+if uploaded_historical is not None and 'excel_auto_detected' not in st.session_state:
+    st.session_state.excel_auto_detected = True
+    
+    detected_sheets = auto_detect_excel_sheets(uploaded_historical)
+    if detected_sheets and len(detected_sheets) > 0:
+        # Update both sheet names and branch names if they match
+        st.session_state.config['excel_sheet_names'] = detected_sheets
+        
+        # Auto-detect week count from historical data
+        week_count = auto_detect_week_count(uploaded_historical, detected_sheets)
+        if week_count and week_count != 52:
+            st.session_state.config['week_count'] = week_count
+            # Auto-adjust quarters for different week counts
+            if week_count == 53:
+                st.session_state.config['quarters'] = {
+                    'Q1': (1, 13),
+                    'Q2': (14, 27),
+                    'Q3': (28, 40),
+                    'Q4': (41, 53)
+                }
+            st.sidebar.info(f"📊 Detected {week_count} weeks in historical data")
+        
+        # If detected sheets look like branch names (2-4 chars, all caps), use them as branches too
+        if all(len(s) <= 4 and s.isupper() for s in detected_sheets):
+            old_branches = st.session_state.config['branches']
+            st.session_state.config['branches'] = detected_sheets
+            
+            # Only show message if branches actually changed
+            if old_branches != detected_sheets:
+                st.sidebar.success(f"✨ Auto-detected branches: {', '.join(detected_sheets)}")
+                st.sidebar.info("⬆️ Scroll up to upload CSV files for each branch")
+        else:
+            st.sidebar.info(f"📊 Detected Excel sheets: {', '.join(detected_sheets)}")
+
+# Show auto-detected configuration in sidebar
+if all_files_uploaded or uploaded_historical is not None:
+    with st.sidebar.expander("🔍 Auto-Detected Configuration", expanded=False):
+        if all_files_uploaded:
+            st.markdown(f"""
+            **CSV Structure:**
+            - Has Header: {'Yes' if st.session_state.config['csv_has_header'] else 'No'}
+            - Columns: {len(st.session_state.config['csv_columns'])}
+            
+            **Date Format:** {'DD/MM/YYYY' if st.session_state.config['date_format'] == 'dayfirst' else 'MM/DD/YYYY'}
+            
+            **Currency Symbol:** {st.session_state.config['currency_symbol']}
+            """)
+            
+            # Show intelligent column mappings
+            mappings = st.session_state.config.get('column_mappings', {})
+            if mappings:
+                st.markdown("**Column Mappings:**")
+                for required_field, mapped_column in mappings.items():
+                    if mapped_column:
+                        st.markdown(f"✅ `{required_field}` ← `{mapped_column}`")
+                if len(mappings) < 3:
+                    st.warning("⚠️ Some required columns not mapped. Check your data structure.")
+        
+        st.markdown(f"""
+        **Branches:** {', '.join(st.session_state.config['branches'])}
+        """)
+        
+        if uploaded_historical is not None:
+            quarters_str = ", ".join([f"{q}: {r[0]}-{r[1]}" for q, r in st.session_state.config['quarters'].items()])
+            st.markdown(f"""
+            **Historical Data:**
+            - Excel Sheets: {', '.join(st.session_state.config['excel_sheet_names'])}
+            - Week Count: {st.session_state.config['week_count']}
+            - Quarters: {quarters_str}
+            """)
+        
+        st.markdown("*If anything looks wrong, adjust in Advanced Settings above*")
+
+st.sidebar.markdown("---")
 
 if all_files_uploaded:
-    df = load_data(uploaded_nsw, uploaded_qld, uploaded_wa)
+    df = load_data(
+        uploaded_branch_files, 
+        st.session_state.config['branches'],
+        st.session_state.config['csv_columns'],
+        st.session_state.config['date_format'],
+        st.session_state.config['csv_has_header'],
+        st.session_state.config.get('column_mappings', {})
+    )
 else:
-    st.sidebar.warning("⚠ Please upload all 3 CSV files to proceed")
+    required_count = len(st.session_state.config['branches'])
+    st.sidebar.warning(f"⚠ Please upload all {required_count} CSV files to proceed")
     df = None
 
 @st.cache_data
-def load_historical_sales_data(excel_file=None):
+def load_historical_sales_data(excel_file=None, sheet_names=None, excel_header_row=0, excel_data_start_row=2):
     """Loads and preprocesses the historical weekly sales data from Excel sheets,
     handling the two-row header structure and selecting relevant columns."""
     if excel_file is None:
@@ -81,7 +700,8 @@ def load_historical_sales_data(excel_file=None):
     else:
         excel_file_path = excel_file
     
-    sheet_names = ['WA', 'QLD', 'NSW'] # These are the sheet names within the Excel file
+    if sheet_names is None:
+        sheet_names = ['WA', 'QLD', 'NSW']  # Default sheet names
 
     all_historical_df = []
 
@@ -90,8 +710,8 @@ def load_historical_sales_data(excel_file=None):
             # Read the specific sheet from the Excel file with no header initially
             df_raw = pd.read_excel(excel_file_path, sheet_name=sheet_name, header=None)
 
-            # Extract the relevant header information from the first two rows
-            header_row_0 = df_raw.iloc[0] # Contains 'Financial Year', '18/19', 'Variance YOY', etc.
+            # Extract the relevant header information from the specified header row
+            header_row_0 = df_raw.iloc[excel_header_row]  # Configurable header row
 
             # Identify the indices of the actual sales year columns in header_row_0
             # These are columns like '18/19', '19/20', etc., which are strings containing '/'
@@ -103,11 +723,11 @@ def load_historical_sales_data(excel_file=None):
             for idx in sales_year_indices:
                 new_column_names.append(str(header_row_0[idx]))
 
-            # Select the actual data rows (starting from index 2, i.e., the 3rd row)
+            # Select the actual data rows (starting from configurable data start row)
             # and only the columns that correspond to our new_column_names
             data_columns_to_select = [0] + sales_year_indices
 
-            df_processed = df_raw.iloc[2:, data_columns_to_select].copy()
+            df_processed = df_raw.iloc[excel_data_start_row:, data_columns_to_select].copy()
             df_processed.columns = new_column_names # Assign the new, clean column names
 
             # Filter out summary rows (Q1 Total, Totals, etc.)
@@ -145,11 +765,21 @@ def load_historical_sales_data(excel_file=None):
 if all_files_uploaded:
     # Load historical dataframes
     if uploaded_historical is not None:
-        historical_df = load_historical_sales_data(uploaded_historical)
+        historical_df = load_historical_sales_data(
+            uploaded_historical, 
+            st.session_state.config['excel_sheet_names'],
+            st.session_state.config['excel_header_row'],
+            st.session_state.config['excel_data_start_row']
+        )
     else:
         # Try to load from default file if it exists
         try:
-            historical_df = load_historical_sales_data()
+            historical_df = load_historical_sales_data(
+                None,
+                st.session_state.config['excel_sheet_names'],
+                st.session_state.config['excel_header_row'],
+                st.session_state.config['excel_data_start_row']
+            )
         except:
             historical_df = pd.DataFrame()
 
@@ -273,9 +903,9 @@ if all_files_uploaded:
             total_years = filtered_historical_df['Financial Year'].nunique()
             
             with col1:
-                st.metric("Total Sales", f"${total_sales:,.2f}")
+                st.metric("Total Sales", format_currency(total_sales))
             with col2:
-                st.metric("Avg Weekly Sales", f"${avg_weekly_sales:,.2f}")
+                st.metric("Avg Weekly Sales", format_currency(avg_weekly_sales))
             with col3:
                 st.metric("Total Weeks", total_weeks)
             with col4:
@@ -293,8 +923,9 @@ if all_files_uploaded:
                 pivot_annual['Total'] = pivot_annual.sum(axis=1)
                 
                 # Format as currency
+                currency_format = f"{st.session_state.config['currency_symbol']}{{:,.2f}}"
                 st.dataframe(
-                    pivot_annual.style.format("${:,.2f}"),
+                    pivot_annual.style.format(currency_format),
                     use_container_width=True
                 )
                 
@@ -345,19 +976,15 @@ if all_files_uploaded:
         with tab2:
             st.subheader("Quarter Analysis")
             
-            # Add Quarter column to dataframe
-            def get_quarter(week):
-                if 1 <= week <= 13:
-                    return 'Q1'
-                elif 14 <= week <= 26:
-                    return 'Q2'
-                elif 27 <= week <= 39:
-                    return 'Q3'
-                else:
-                    return 'Q4'
+            # Add Quarter column to dataframe using configurable quarter definitions
+            def get_quarter(week, quarters_config):
+                for quarter_name, (start, end) in quarters_config.items():
+                    if start <= week <= end:
+                        return quarter_name
+                return 'Q4'  # Default fallback
             
             quarter_df = filtered_historical_df.copy()
-            quarter_df['Quarter'] = quarter_df['Week'].apply(get_quarter)
+            quarter_df['Quarter'] = quarter_df['Week'].apply(lambda w: get_quarter(w, st.session_state.config['quarters']))
             
             # Quarter summary table
             quarter_summary = quarter_df.groupby(['Financial Year', 'Quarter', 'Branch'])['Total'].sum().reset_index()
@@ -369,8 +996,9 @@ if all_files_uploaded:
             )
             quarter_pivot['Total'] = quarter_pivot.sum(axis=1)
             
+            currency_format = f"{st.session_state.config['currency_symbol']}{{:,.2f}}"
             st.dataframe(
-                quarter_pivot.style.format("${:,.2f}"),
+                quarter_pivot.style.format(currency_format),
                 use_container_width=True
             )
             
@@ -395,16 +1023,16 @@ if all_files_uploaded:
         # --- 2. Enhanced Quarter/Week Range Analysis ---
         st.subheader("Quarter/Week Range Analysis")
 
-        # Option to select Quarters
-        quarter_options = ["All Quarters", "Q1 (Weeks 1-13)", "Q2 (Weeks 14-26)", "Q3 (Weeks 27-39)", "Q4 (Weeks 40-52)"]
+        # Dynamically generate quarter options from configuration
+        quarters_config = st.session_state.config['quarters']
+        quarter_options = ["All Quarters"]
+        quarter_mapping = {}
+        for q_name, (start, end) in quarters_config.items():
+            display_name = f"{q_name} (Weeks {start}-{end})"
+            quarter_options.append(display_name)
+            quarter_mapping[display_name] = (start, end)
+        
         selected_quarters_display = st.multiselect("Select Quarter(s)", quarter_options, default=["All Quarters"])
-
-        quarter_mapping = {
-            "Q1 (Weeks 1-13)": (1, 13),
-            "Q2 (Weeks 14-26)": (14, 26),
-            "Q3 (Weeks 27-39)": (27, 39),
-            "Q4 (Weeks 40-52)": (40, 52)
-        }
 
         # Option to select specific week ranges
         all_weeks = sorted(filtered_historical_df['Week'].unique().tolist())
@@ -430,7 +1058,7 @@ if all_files_uploaded:
             st.dataframe(quarter_week_filtered_df[['Branch', 'Financial Year', 'Week', 'Total']].sort_values(['Branch', 'Financial Year', 'Week']), use_container_width=True)
 
             total_sales_for_range = quarter_week_filtered_df['Total'].sum()
-            st.metric(label=f"Total Sales for Selected Range", value=f"${total_sales_for_range:,.2f}")
+            st.metric(label=f"Total Sales for Selected Range", value=format_currency(total_sales_for_range))
 
             # Line chart for selected week range/quarter
             st.subheader("Sales Trend for Selected Range")
@@ -483,11 +1111,11 @@ if all_files_uploaded:
                     pct_change = (difference / year1_total * 100) if year1_total > 0 else 0
                     
                     with col1:
-                        st.metric(f"{compare_year_1} Total", f"${year1_total:,.2f}")
+                        st.metric(f"{compare_year_1} Total", format_currency(year1_total))
                     with col2:
-                        st.metric(f"{compare_year_2} Total", f"${year2_total:,.2f}")
+                        st.metric(f"{compare_year_2} Total", format_currency(year2_total))
                     with col3:
-                        st.metric("Change", f"${difference:,.2f}", f"{pct_change:+.2f}%")
+                        st.metric("Change", format_currency(difference), f"{pct_change:+.2f}%")
                     
                     # Week-by-week comparison
                     st.subheader(f"Week-by-Week Comparison: {compare_year_1} vs {compare_year_2}")
@@ -527,11 +1155,12 @@ if all_files_uploaded:
                     
                     # Show detailed comparison table
                     with st.expander("View Detailed Comparison Table"):
+                        currency_format = f"{st.session_state.config['currency_symbol']}{{:,.2f}}"
                         st.dataframe(
                             comparison_df.style.format({
-                                f'{compare_year_1}': '${:,.2f}',
-                                f'{compare_year_2}': '${:,.2f}',
-                                'Difference': '${:,.2f}',
+                                f'{compare_year_1}': currency_format,
+                                f'{compare_year_2}': currency_format,
+                                'Difference': currency_format,
                                 '% Change': '{:+.2f}%'
                             }),
                             use_container_width=True
@@ -575,23 +1204,31 @@ if all_files_uploaded:
     sales_pivot = customer_sales.pivot(index='Customer', columns='Year', values='Total').fillna(0)
 
     years = sorted(sales_pivot.columns)
-    if len(years) >= 2:
-        sales_pivot['Drop?'] = sales_pivot[years[-1]] < sales_pivot[years[-2]]
-        sales_pivot['Rise?'] = sales_pivot[years[-1]] > sales_pivot[years[-2]]
+    year_window = st.session_state.config['year_comparison_window']
+    
+    if len(years) >= year_window:
+        # Compare the most recent year with the average of previous years based on window
+        recent_years = years[-year_window:]
+        current_year = recent_years[-1]
+        previous_year = recent_years[-2]
+        
+        sales_pivot['Drop?'] = sales_pivot[current_year] < sales_pivot[previous_year]
+        sales_pivot['Rise?'] = sales_pivot[current_year] > sales_pivot[previous_year]
 
         dropping_customers = sales_pivot[sales_pivot['Drop?']].reset_index()
         rising_customers = sales_pivot[sales_pivot['Rise?']].reset_index()
 
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader(f"⬇ Dropping Customers ")
-            st.dataframe(dropping_customers[['Customer', years[-2], years[-1]]])
+            st.subheader(f"⬇ Dropping Customers ({previous_year} → {current_year})")
+            display_cols = ['Customer'] + [previous_year, current_year]
+            st.dataframe(dropping_customers[display_cols])
 
         with col2:
-            st.subheader(f"⬆ Rising Customers ")
-            st.dataframe(rising_customers[['Customer', years[-2], years[-1]]])
+            st.subheader(f"⬆ Rising Customers ({previous_year} → {current_year})")
+            st.dataframe(rising_customers[display_cols])
     else:
-        st.info("Not enough years for drop/rise analysis.")
+        st.info(f"Not enough years for drop/rise analysis. Need at least {year_window} years of data.")
 
     # ---- Customer Purchase View ---- #
     st.header("▸ Customer-wise Purchase Detail")
@@ -620,10 +1257,10 @@ if all_files_uploaded:
         ]
 
         # Show drop warnings
-        if 'dropping_customers' in locals():
+        if 'dropping_customers' in locals() and 'previous_year' in locals() and 'current_year' in locals():
             for cust in selected_customers:
                 if cust in dropping_customers['Customer'].values:
-                    st.warning(f" {cust} is a **dropping customer** (sales declined from {years[-2]} to {years[-1]}).")
+                    st.warning(f" {cust} is a **dropping customer** (sales declined from {previous_year} to {current_year}).")
 
         # Show raw purchase records
         # Show raw purchase records
@@ -635,7 +1272,7 @@ if all_files_uploaded:
 
         # Calculate and display the total sum of purchases
         total_filtered_purchase = cust_purchase['Total'].sum()
-        st.metric(label="Total Purchase for Filtered Records", value=f"${total_filtered_purchase:,.2f}")
+        st.metric(label="Total Purchase for Filtered Records", value=format_currency(total_filtered_purchase))
 
         # Year-wise Total Purchases (Bar Chart)
         st.subheader("▸ Year-wise Purchase Totals")
@@ -674,21 +1311,31 @@ if all_files_uploaded:
 else:
     # Show welcome message when no files are uploaded
     st.title("▸ Invoice & Customer Analysis Dashboard")
-    st.info("↑ Please upload CSV files for all three branches (NSW, QLD, WA) using the sidebar to begin analysis.")
     
-    st.markdown("""
+    branch_names = ", ".join(st.session_state.config['branches'])
+    num_branches = len(st.session_state.config['branches'])
+    
+    st.info(f"↑ Please upload CSV files for all {num_branches} branches ({branch_names}) using the sidebar to begin analysis.")
+    
+    st.markdown(f"""
     ### ▸ Instructions:
     1. Use the sidebar on the left to upload your CSV files
-    2. Upload one file for each branch: NSW, QLD, and WA
-    3. Ensure your CSV files have the same structure with these columns:
-       - Entity Name, Branch Region, Branch, Division, Due Date, Top Level Customer ID, 
-         Top Level Customer Name, Customer ID, Customer, Billing Group ID, Billing Group, 
-         Invoice ID, Invoice #, Issue Date, Total, Outstanding, Delivery, Status
-    4. Once all files are uploaded, the dashboard will automatically display your analysis
+    2. Upload one file for each branch: {branch_names}
+    3. Ensure your CSV files have the same structure with the expected columns
+    4. If your data structure is different, use the **⚙️ Configuration** → **🔧 Advanced Settings** in the sidebar to customize:
+       - Branch names
+       - Date format (DD/MM/YYYY or MM/DD/YYYY)
+       - Currency symbol
+       - Quarter definitions
+       - Excel sheet names for historical data
+    5. Once all files are uploaded, the dashboard will automatically display your analysis
     
     ### ▸ Available Visualizations:
     - Annual and Monthly Sales Analysis
     - Customer Trend Analysis (Rising vs Dropping Customers)
     - Customer-wise Purchase Details
     - Interactive Filters for Custom Analysis
+    
+    ### 🔧 Flexible Configuration:
+    This dashboard supports customizable data structures. If you get any errors, check the Advanced Settings.
     """)
