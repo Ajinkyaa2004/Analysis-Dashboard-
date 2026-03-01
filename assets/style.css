@@ -9,6 +9,10 @@
     --accent-warning: #EF4444;
     --sidebar-bg: #F7FAFC;
     --border-color: #E2E8F0;
+
+    /* Override Streamlit's built-in primary colour (used for radio dots, slider tracks, etc.) */
+    --primary-color: #3B82F6 !important;
+    --primary-hue: 217;
 }
 
 /* App Container */
@@ -159,18 +163,26 @@ footer {visibility: hidden;}
     fill: #3B82F6 !important;
 }
 
-/* Slider track fill & thumb */
-[data-testid="stSlider"] [data-testid="stSliderThumb"] {
-    background-color: #3B82F6 !important;
-    border-color: #3B82F6 !important;
-}
-[data-testid="stSlider"] div[class*="Track"] > div {
-    background: #3B82F6 !important;
-}
-/* Range slider filled portion */
+/* Slider — all parts: thumb, filled track, rail */
+[data-testid="stSlider"] [data-testid="stSliderThumb"],
 [data-testid="stSlider"] [role="slider"] {
     background-color: #3B82F6 !important;
     border-color: #3B82F6 !important;
+    box-shadow: 0 0 0 3px #BFDBFE !important;
+}
+/* Filled track between thumbs */
+[data-testid="stSlider"] div[class*="Track"] > div,
+[data-testid="stSlider"] [data-testid="stSliderTrack"] > div,
+[data-testid="stSlider"] div[class*="track"] > div:nth-child(2),
+[data-testid="stSlider"] > div > div > div > div[style*="background"] {
+    background: #3B82F6 !important;
+    background-color: #3B82F6 !important;
+}
+/* Catch-all: any div inside the slider that Streamlit colors with primary */
+[data-testid="stSlider"] div[style*="background-color: rgb(255"],
+[data-testid="stSlider"] div[style*="background: rgb(255"] {
+    background-color: #3B82F6 !important;
+    background: #3B82F6 !important;
 }
 /* Slider min/max value labels */
 [data-testid="stSlider"] p,
@@ -284,21 +296,22 @@ body {
     zoom: 0.9; /* 90% scale for desktop */
 }
 
-/* 2. Remove emojis from specific headers if marked with classes, or globally adjust font for icons */
-.st-emotion-cache-1629p8f h1, .st-emotion-cache-1629p8f h2, .st-emotion-cache-1629p8f h3 {
-    /* FontAwesome or Material Icons font family can be enforced here if loaded */
-    font-family: 'Inter', sans-serif; 
-}
-
-/* 3. Smooth scrolling */
+/* 2. Smooth scrolling */
 html {
     scroll-behavior: smooth;
 }
 
+/* 3. GPU-accelerate animated elements */
+[data-testid="stPlotlyChart"],
+[data-testid="stDataFrame"],
+[data-baseweb="tab-panel"] {
+    will-change: auto;
+    contain: layout style;
+}
+
 /* 4. Optimize dataframe rendering */
 [data-testid="stDataFrame"] {
-    /* Ensure it doesn't overflow unnecessarily */
-    overflow: auto; 
+    overflow: auto;
 }
 
 /* Mobile specific reset for zoom to avoid too small text */
@@ -306,4 +319,81 @@ html {
     body {
         zoom: 1.0;
     }
+}
+
+/* =====================================================
+   ORANGE → BLUE: REMAINING STREAMLIT COMPONENTS
+   Clear every last orange/amber trace
+   ===================================================== */
+
+/* Warning alert boxes (sidebar + main) — replace amber with blue */
+[data-testid="stAlert"][data-baseweb="notification"],
+div[data-baseweb="notification"] {
+    background-color: #EFF6FF !important;
+    border-left: 3px solid #3B82F6 !important;
+}
+[data-testid="stAlert"] p,
+[data-testid="stAlert"] span,
+div[data-baseweb="notification"] span,
+div[data-baseweb="notification"] p {
+    color: #1D4ED8 !important;
+}
+/* The warning icon SVG */
+[data-testid="stAlert"] svg,
+div[data-baseweb="notification"] svg {
+    fill: #3B82F6 !important;
+    color: #3B82F6 !important;
+}
+
+/* st.warning specifically (kind=warning has amber in BaseWeb) */
+.stWarning,
+[data-testid="stAlert"][aria-label*="warning i"],
+[data-testid="stStatusWidget"] {
+    background-color: #EFF6FF !important;
+    border-color: #3B82F6 !important;
+    color: #1D4ED8 !important;
+}
+
+/* Progress bars */
+[data-testid="stProgress"] > div > div > div > div {
+    background-color: #3B82F6 !important;
+}
+
+/* Spinner */
+[data-testid="stSpinner"] span,
+.stSpinner > div {
+    border-top-color: #3B82F6 !important;
+}
+
+/* File uploader drag-border */
+[data-testid="stFileUploader"] section {
+    border-color: #BFDBFE !important;
+}
+[data-testid="stFileUploader"] section:hover {
+    border-color: #3B82F6 !important;
+    background-color: #EFF6FF !important;
+}
+
+/* Number input focus ring */
+input[type="number"]:focus,
+input[type="text"]:focus,
+textarea:focus {
+    border-color: #3B82F6 !important;
+    box-shadow: 0 0 0 2px #BFDBFE !important;
+    outline: none !important;
+}
+
+/* Radio button — outer ring and inner dot ONLY */
+[data-testid="stRadio"] [data-baseweb="radio"] > div:first-child {
+    border-color: #3B82F6 !important;
+}
+/* Selected state: inner filled dot */
+[data-testid="stRadio"] [data-baseweb="radio"][data-checked="true"] > div:first-child {
+    background-color: #3B82F6 !important;
+    border-color: #3B82F6 !important;
+}
+
+/* Tooltip hover accent */
+[data-baseweb="tooltip"] {
+    background-color: #1E40AF !important;
 }

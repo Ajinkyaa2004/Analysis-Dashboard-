@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 import plotly.express as px
 
 
@@ -53,6 +51,38 @@ if 'config' not in st.session_state:
             'Outstanding': 'Outstanding'
         }
     }
+
+# ========================================
+# TOP-LEVEL CACHED HELPER FUNCTIONS
+# (defined here so @st.cache_data persists across every rerun)
+# ========================================
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def filter_main_data(df, branches, years, start, end, customers):
+    mask = (
+        df['Branch'].isin(branches) &
+        df['Year'].between(years[0], years[1]) &
+        df['Issue Date'].between(start, end)
+    )
+    filtered = df[mask]
+    if customers:
+        filtered = filtered[filtered['Customer'].isin(customers)]
+    return filtered
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def filter_historical_data(hist_df, branches, financial_yrs):
+    if hist_df.empty: return pd.DataFrame()
+    return hist_df[
+        hist_df['Branch'].isin(branches) &
+        hist_df['Financial Year'].isin(financial_yrs)
+    ].copy()
+
+def get_quarter(week, quarters_config):
+    """Map a week number to its quarter label using the current config."""
+    for quarter_name, (start, end) in quarters_config.items():
+        if start <= week <= end:
+            return quarter_name
+    return list(quarters_config.keys())[-1]  # default to last quarter
 
 # ========================================
 # UI COMPONENTS
@@ -538,6 +568,162 @@ def load_data(branch_files, branch_names, columns, date_format='dayfirst', csv_h
 
     return df.dropna(subset=['Issue Date', 'Total', 'Branch'])
 
+
+def load_combined_data(combined_file, date_format='dayfirst', column_mappings=None):
+    """Load data from a single combined CSV file that already has a Branch column."""
+    if column_mappings is None:
+        column_mappings = {}
+
+    try:
+        combined_file.seek(0)
+        # utf-8-sig automatically strips the BOM (\ufeff) that Excel-exported CSVs often add
+        df = pd.read_csv(combined_file, encoding='utf-8-sig')
+        # Strip whitespace and BOM characters from column names
+        df.columns = df.columns.str.strip().str.lstrip('\ufeff')
+    except UnicodeDecodeError:
+        try:
+            combined_file.seek(0)
+            df = pd.read_csv(combined_file, encoding='latin-1')
+            df.columns = df.columns.str.strip().str.lstrip('\ufeff')
+        except Exception as e:
+            st.error(f"Error reading combined CSV: {str(e)}")
+            return None
+    except Exception as e:
+        st.error(f"Error reading combined CSV: {str(e)}")
+        return None
+
+    # --- Branch detection ---
+    # Priority 1: explicit Branch / Branch Region columns (if they actually have data)
+    col_map_lower = {c.lower().strip(): c for c in df.columns}
+    branch_col = None
+    candidates = [
+        column_mappings.get('Branch', 'Branch'),
+        'Branch', 'branch', 'BRANCH',
+        'Branch Region', 'branch region', 'BRANCH REGION',
+    ]
+    for candidate in candidates:
+        actual = col_map_lower.get(candidate.lower().strip())
+        if not actual:
+            continue
+        non_null = df[actual].dropna()
+        real_values = non_null.astype(str).str.strip()
+        real_values = real_values[~real_values.str.lower().isin(['nan', 'none', ''])]
+        if len(real_values) > 0:
+            branch_col = actual
+            break
+
+    if branch_col is not None:
+        df['Branch'] = df[branch_col].astype(str).str.strip()
+        df['Branch'] = df['Branch'].replace({'nan': None, 'None': None, '': None})
+    else:
+        # Priority 2: extract branch from Entity Name column
+        # e.g. "Connect Resources (NSW) Pty Ltd" → "NSW"
+        # e.g. "Connect Resources (QLD) Pty Ltd" → "QLD"
+        # e.g. "Connect Resources Pty Ltd" (no state in parentheses) → "WA"
+        entity_col = col_map_lower.get('entity name')
+        if entity_col:
+            known_branches = st.session_state.config.get('branches', ['NSW', 'QLD', 'WA'])
+            import re
+
+            def extract_branch(entity):
+                if pd.isna(entity):
+                    return None
+                entity = str(entity).strip()
+                
+                # Priority 1: Check for state in parentheses like "(NSW)" or "(QLD)"
+                m = re.search(r'\(([A-Z]{2,3})\)', entity, re.IGNORECASE)
+                if m:
+                    state = m.group(1).upper()
+                    if state in known_branches:
+                        return state
+                
+                # Priority 2: If no parentheses found, check if it's the base entity name
+                # "Connect Resources Pty Ltd" (without state) should be WA
+                base_patterns = [
+                    r'^Connect Resources Pty Ltd$',
+                    r'^Connect Resources$'
+                ]
+                for pattern in base_patterns:
+                    if re.match(pattern, entity, re.IGNORECASE):
+                        return 'WA'  # Default branch for base entity name
+                
+                # Priority 3: Check if any branch name appears directly in the text
+                for b in known_branches:
+                    if b.upper() in entity.upper():
+                        return b.upper()
+                
+                return None
+
+            df['Branch'] = df[entity_col].apply(extract_branch)
+            
+            # Show info about extraction
+            if df['Branch'].isna().any():
+                st.sidebar.warning(
+                    f"Some rows could not be assigned a branch from Entity Name. "
+                    f"They will be excluded."
+                )
+            else:
+                st.sidebar.info("Branch extracted from 'Entity Name' column.")
+        else:
+            st.error(
+                "Could not determine branch. CSV needs a 'Branch', 'Branch Region', or "
+                "'Entity Name' column that identifies which branch each row belongs to. "
+                f"Columns found: {', '.join(df.columns.tolist())}"
+            )
+            return None
+
+    if df['Branch'].isna().all():
+        st.error("Branch values could not be determined from the CSV. All rows have an empty branch.")
+        return None
+
+    # Show diagnostic info in sidebar
+    with st.sidebar.expander("🔍 CSV Diagnostics", expanded=False):
+        branch_src = branch_col if branch_col else 'Entity Name (auto-extracted)'
+        st.write(f"**Branch source:** `{branch_src}`")
+        st.write("**Unique Branches:**", sorted(df['Branch'].dropna().unique().tolist()))
+        st.write("**Total rows:**", len(df))
+        st.write("**Rows with branch:**", int(df['Branch'].notna().sum()))
+
+
+    # --- Customer column ---
+    customer_col = column_mappings.get('Customer', 'Customer')
+    if customer_col in df.columns:
+        df['Customer'] = df[customer_col].astype(str).str.strip()
+    else:
+        df['Customer'] = 'Unknown Customer'
+
+    # --- Issue Date column ---
+    date_col = column_mappings.get('Issue Date', 'Issue Date')
+    if date_col in df.columns:
+        df['Issue Date'] = pd.to_datetime(
+            df[date_col], dayfirst=(date_format == 'dayfirst'), errors='coerce'
+        )
+    else:
+        st.error("Issue Date column not found in combined CSV.")
+        return None
+
+    # --- Total column ---
+    total_col = column_mappings.get('Total', 'Total')
+    if total_col in df.columns:
+        df['Total'] = pd.to_numeric(
+            df[total_col].astype(str).str.replace(',', ''), errors='coerce'
+        )
+    else:
+        st.error("Total column not found in combined CSV.")
+        return None
+
+    # --- Derived columns ---
+    df['Year'] = df['Issue Date'].dt.year
+    df['Month'] = df['Issue Date'].dt.to_period('M').astype(str)
+
+    result = df.dropna(subset=['Issue Date', 'Total', 'Branch'])
+
+    # Friendly summary
+    branches_found = sorted(result['Branch'].unique().tolist())
+    st.sidebar.success(f"Loaded combined file — branches detected: {', '.join(branches_found)}")
+    return result
+
+
 # ========================================
 # SIDEBAR HEADER
 # ========================================
@@ -602,17 +788,18 @@ with st.sidebar.expander("Configuration", expanded=False):
         help="Default: 52"
     )
     
+    _q = st.session_state.config['quarters']
     col1, col2 = st.columns(2)
     with col1:
-        q1_start = st.number_input("Q1 Start", min_value=1, value=1, key='q1s')
-        q1_end = st.number_input("Q1 End", min_value=1, value=13, key='q1e')
-        q2_start = st.number_input("Q2 Start", min_value=1, value=14, key='q2s')
-        q2_end = st.number_input("Q2 End", min_value=1, value=26, key='q2e')
+        q1_start = st.number_input("Q1 Start", min_value=1, value=_q['Q1'][0], key='q1s')
+        q1_end = st.number_input("Q1 End", min_value=1, value=_q['Q1'][1], key='q1e')
+        q2_start = st.number_input("Q2 Start", min_value=1, value=_q['Q2'][0], key='q2s')
+        q2_end = st.number_input("Q2 End", min_value=1, value=_q['Q2'][1], key='q2e')
     with col2:
-        q3_start = st.number_input("Q3 Start", min_value=1, value=27, key='q3s')
-        q3_end = st.number_input("Q3 End", min_value=1, value=39, key='q3e')
-        q4_start = st.number_input("Q4 Start", min_value=1, value=40, key='q4s')
-        q4_end = st.number_input("Q4 End", min_value=1, value=52, key='q4e')
+        q3_start = st.number_input("Q3 Start", min_value=1, value=_q['Q3'][0], key='q3s')
+        q3_end = st.number_input("Q3 End", min_value=1, value=_q['Q3'][1], key='q3e')
+        q4_start = st.number_input("Q4 Start", min_value=1, value=_q['Q4'][0], key='q4s')
+        q4_end = st.number_input("Q4 End", min_value=1, value=_q['Q4'][1], key='q4e')
     
     config_quarters = {
         'Q1': (q1_start, q1_end),
@@ -660,16 +847,39 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Upload Sales Data")
 
-# Dynamic branch file uploaders
+# Upload mode toggle
+upload_mode = st.sidebar.radio(
+    "Upload mode",
+    ["Separate CSVs (one per branch)", "Combined CSV (all branches in one file)"],
+    key="upload_mode",
+    horizontal=False
+)
+
+uploaded_combined_file = None
 uploaded_branch_files = []
 
-for branch in st.session_state.config['branches']:
-    uploaded_file = st.sidebar.file_uploader(
-        f"{branch} Branch CSV", 
-        type=['csv'], 
-        key=f'branch_{branch.lower().replace(" ", "_")}'
+if upload_mode == "Separate CSVs (one per branch)":
+    for branch in st.session_state.config['branches']:
+        uploaded_file = st.sidebar.file_uploader(
+            f"{branch} Branch CSV",
+            type=['csv'],
+            key=f'branch_{branch.lower().replace(" ", "_")}'
+        )
+        uploaded_branch_files.append(uploaded_file)
+else:
+    st.sidebar.markdown(
+        '<p style="font-size:0.8rem;color:#475569;margin-bottom:0.25rem;">'  
+        '<i class="fa-solid fa-file-csv" style="color:#3B82F6;margin-right:6px;"></i>'
+        'Upload Combined CSV</p>',
+        unsafe_allow_html=True
     )
-    uploaded_branch_files.append(uploaded_file)
+    uploaded_combined_file = st.sidebar.file_uploader(
+        "Combined CSV (must include a Branch column)",
+        type=['csv'],
+        key='combined_csv',
+        help="Upload a single CSV file that contains rows for all branches. "
+             "The file must have a 'Branch' column (e.g. NSW, QLD, WA)."
+    )
 
 st.sidebar.markdown("---")
 
@@ -687,7 +897,10 @@ st.sidebar.markdown("---")
 # AUTO-DETECTION & CONFIGURATION UPDATE
 # ========================================
 # Reset auto-detection flags when files are removed
-if not all(f is not None for f in uploaded_branch_files):
+_separate_all_uploaded = all(f is not None for f in uploaded_branch_files) if uploaded_branch_files else False
+_combined_uploaded = uploaded_combined_file is not None
+
+if not _separate_all_uploaded and not _combined_uploaded:
     if 'auto_detected' in st.session_state:
         del st.session_state.auto_detected
         
@@ -696,9 +909,9 @@ if uploaded_historical is None:
         del st.session_state.excel_auto_detected
 
 # Check if files are uploaded and trigger auto-detection
-all_files_uploaded = all(f is not None for f in uploaded_branch_files)
+all_files_uploaded = _separate_all_uploaded or _combined_uploaded
 
-if all_files_uploaded and 'auto_detected' not in st.session_state:
+if _separate_all_uploaded and 'auto_detected' not in st.session_state:
     st.session_state.auto_detected = True
     
     # Auto-detect configuration from uploaded files
@@ -723,6 +936,32 @@ if all_files_uploaded and 'auto_detected' not in st.session_state:
     if detected_updates:
         st.session_state.config.update(detected_updates)
         st.sidebar.success("Auto-detected file structure!")
+
+elif _combined_uploaded and 'auto_detected' not in st.session_state:
+    st.session_state.auto_detected = True
+
+    # Wrap single file in list so the same detection functions work unchanged
+    _combined_as_list = [uploaded_combined_file]
+    detected_updates = {}
+
+    # Detect column structure and mappings
+    csv_config = auto_detect_csv_structure(_combined_as_list)
+    if csv_config:
+        detected_updates.update(csv_config)
+
+    # Detect date format
+    date_format = auto_detect_date_format(_combined_as_list)
+    if date_format:
+        detected_updates['date_format'] = date_format
+
+    # Detect currency
+    currency = auto_detect_currency(_combined_as_list)
+    if currency:
+        detected_updates['currency_symbol'] = currency
+
+    if detected_updates:
+        st.session_state.config.update(detected_updates)
+        st.sidebar.success("Auto-detected combined CSV structure!")
 
 # Auto-detect Excel sheets when historical file is uploaded
 if uploaded_historical is not None and 'excel_auto_detected' not in st.session_state:
@@ -801,83 +1040,97 @@ if all_files_uploaded or uploaded_historical is not None:
 st.sidebar.markdown("---")
 
 if all_files_uploaded:
-    df = load_data(
-        uploaded_branch_files, 
-        st.session_state.config['branches'],
-        st.session_state.config['csv_columns'],
-        st.session_state.config['date_format'],
-        st.session_state.config['csv_has_header'],
-        st.session_state.config.get('column_mappings', {})
-    )
+    if _combined_uploaded:
+        df = load_combined_data(
+            uploaded_combined_file,
+            st.session_state.config['date_format'],
+            st.session_state.config.get('column_mappings', {})
+        )
+    else:
+        df = load_data(
+            uploaded_branch_files,
+            st.session_state.config['branches'],
+            st.session_state.config['csv_columns'],
+            st.session_state.config['date_format'],
+            st.session_state.config['csv_has_header'],
+            st.session_state.config.get('column_mappings', {})
+        )
 else:
-    required_count = len(st.session_state.config['branches'])
-    st.sidebar.warning(f"Please upload all {required_count} CSV files to proceed")
+    if upload_mode == "Separate CSVs (one per branch)":
+        required_count = len(st.session_state.config['branches'])
+        st.sidebar.info(f"Please upload all {required_count} branch CSV files to proceed")
+    else:
+        st.sidebar.info("Please upload the combined CSV file to proceed")
     df = None
 
-@st.cache_data
 def load_historical_sales_data(excel_file=None, sheet_names=None, excel_header_row=0, excel_data_start_row=2):
     """Loads and preprocesses the historical weekly sales data from Excel sheets,
     handling the two-row header structure and selecting relevant columns."""
+    import io
     if excel_file is None:
-        excel_file_path = 'HISTORICAL_REPORT.xlsx' # Fallback to default file
+        excel_file_path = 'HISTORICAL_REPORT.xlsx'
+        try:
+            open(excel_file_path)
+        except FileNotFoundError:
+            st.error(f"Error: Excel file '{excel_file_path}' not found. Please ensure it's in the same directory as the script.")
+            return pd.DataFrame(columns=['Week', 'Financial Year', 'Total', 'Branch'])
     else:
-        excel_file_path = excel_file
-    
+        # Load entire file into BytesIO once — avoids file-pointer issues across multiple sheet reads
+        excel_file.seek(0)
+        excel_file_path = io.BytesIO(excel_file.read())
+
     if sheet_names is None:
-        sheet_names = ['WA', 'QLD', 'NSW']  # Default sheet names
+        sheet_names = ['WA', 'QLD', 'NSW']
+
+    # Only process sheets that look like branch names (≤4 uppercase chars, e.g. WA, NSW, QLD).
+    # This automatically skips comparison/summary sheets like QLD-V-WA, NSW-V-WA, etc.
+    branch_sheets = [s for s in sheet_names if len(s) <= 4 and s.replace(' ', '').isupper()]
+    if not branch_sheets:
+        branch_sheets = sheet_names
 
     all_historical_df = []
 
     try:
-        for sheet_name in sheet_names:
-            # Read the specific sheet from the Excel file with no header initially
-            df_raw = pd.read_excel(excel_file_path, sheet_name=sheet_name, header=None)
+        # Open the workbook ONCE — pd.ExcelFile keeps the file handle open so every
+        # sheet.parse() call works regardless of BytesIO position.
+        xls = pd.ExcelFile(excel_file_path)
+    except Exception as e:
+        st.error(f"Could not open Excel file: {e}")
+        return pd.DataFrame(columns=['Week', 'Financial Year', 'Total', 'Branch'])
 
-            # Extract the relevant header information from the specified header row
-            header_row_0 = df_raw.iloc[excel_header_row]  # Configurable header row
+    for sheet_name in branch_sheets:
+        if sheet_name not in xls.sheet_names:
+            continue
+        try:
+            df_raw = xls.parse(sheet_name, header=None)
 
-            # Identify the indices of the actual sales year columns in header_row_0
-            # These are columns like '18/19', '19/20', etc., which are strings containing '/'
+            header_row_0 = df_raw.iloc[excel_header_row]
+
             sales_year_indices = [i for i, val in enumerate(header_row_0) if isinstance(val, str) and '/' in val]
+            if not sales_year_indices:
+                continue
 
-            # Construct the list of new column names for the DataFrame
-            # The first column will be 'Week' (from 'Week No' in row 1, which is df_raw.iloc[1,0])
-            new_column_names = ['Week']
-            for idx in sales_year_indices:
-                new_column_names.append(str(header_row_0[idx]))
-
-            # Select the actual data rows (starting from configurable data start row)
-            # and only the columns that correspond to our new_column_names
+            new_column_names = ['Week'] + [str(header_row_0[i]) for i in sales_year_indices]
             data_columns_to_select = [0] + sales_year_indices
 
             df_processed = df_raw.iloc[excel_data_start_row:, data_columns_to_select].copy()
-            df_processed.columns = new_column_names # Assign the new, clean column names
+            df_processed.columns = new_column_names
 
-            # Filter out summary rows (Q1 Total, Totals, etc.)
             df_processed = df_processed[df_processed['Week'].astype(str).str.contains(r'Week\s\d+', na=False)]
+            if df_processed.empty:
+                continue
 
-            # Melt the DataFrame to unpivot the year columns
-            id_vars_for_melt = ['Week']
-            value_vars_for_melt = [col for col in new_column_names if col != 'Week']
-
-            df_melted = df_processed.melt(id_vars=id_vars_for_melt, value_vars=value_vars_for_melt,
-                                           var_name='Financial Year', value_name='Total')
-
-            # Add Branch column
+            value_vars = [c for c in new_column_names if c != 'Week']
+            df_melted = df_processed.melt(id_vars=['Week'], value_vars=value_vars,
+                                          var_name='Financial Year', value_name='Total')
             df_melted['Branch'] = sheet_name
-
-            # Convert 'Week' to numeric
             df_melted['Week'] = df_melted['Week'].astype(str).str.replace('Week ', '').astype(int)
-
-            # Convert 'Total' to numeric, handling commas and errors, then to float
             df_melted['Total'] = pd.to_numeric(df_melted['Total'].astype(str).str.replace(',', ''), errors='coerce').astype(float)
 
             all_historical_df.append(df_melted)
 
-    except FileNotFoundError:
-        st.error(f"Error: Excel file '{excel_file_path}' not found. Please ensure it's in the same directory as the script.")
-    except Exception as e:
-        st.error(f"An error occurred while processing Excel file '{excel_file_path}' for sheet '{sheet_name}': {e}")
+        except Exception as e:
+            st.warning(f"Skipped sheet '{sheet_name}': {e}")
 
     if all_historical_df:
         return pd.concat(all_historical_df, ignore_index=True).dropna(subset=['Total'])
@@ -913,6 +1166,14 @@ if all_files_uploaded:
     # Check if there are other emojis in sidebar titles...
     # st.sidebar.markdown("### 📤 Upload Sales Data") -> st.sidebar.markdown("### Upload Sales Data")
     st.markdown('<p class="text-secondary" style="margin-bottom: 2rem;">Overview of sales performance across branches</p>', unsafe_allow_html=True)
+
+    # Guard: if df failed to load (e.g. bad CSV), stop here with a clear message
+    if df is None:
+        st.error(
+            "Could not load the sales data file. "
+            "Please check the errors above and re-upload a valid CSV."
+        )
+        st.stop()
 
     # ---- Filters ---- #
     branch_options = df['Branch'].dropna().unique().tolist()
@@ -954,27 +1215,6 @@ if all_files_uploaded:
             start_date = pd.to_datetime(df['Issue Date'].min())
             end_date = pd.to_datetime(df['Issue Date'].max())
             
-    # --- Performance Optimization: Cache Filtering ---
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def filter_main_data(df, branches, years, start, end, customers):
-        mask = (
-            df['Branch'].isin(branches) &
-            df['Year'].between(years[0], years[1]) &
-            df['Issue Date'].between(start, end)
-        )
-        filtered = df[mask]
-        if customers:
-            filtered = filtered[filtered['Customer'].isin(customers)]
-        return filtered
-
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def filter_historical_data(hist_df, branches, financial_yrs):
-        if hist_df.empty: return pd.DataFrame()
-        return hist_df[
-            hist_df['Branch'].isin(branches) &
-            hist_df['Financial Year'].isin(financial_yrs)
-        ].copy()
-
     filtered_df = filter_main_data(
         df, 
         tuple(branch), 
@@ -1147,14 +1387,9 @@ if all_files_uploaded:
             st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-calendar-days" style="color:#3B82F6;"></i> Quarter Analysis</h3>', unsafe_allow_html=True)
             
             # Add Quarter column to dataframe using configurable quarter definitions
-            def get_quarter(week, quarters_config):
-                for quarter_name, (start, end) in quarters_config.items():
-                    if start <= week <= end:
-                        return quarter_name
-                return 'Q4'  # Default fallback
-            
-            quarter_df = filtered_historical_df.copy()
-            quarter_df['Quarter'] = quarter_df['Week'].apply(lambda w: get_quarter(w, st.session_state.config['quarters']))
+            quarter_df = filtered_historical_df[['Financial Year', 'Quarter', 'Branch', 'Total', 'Week']].copy() if 'Quarter' in filtered_historical_df.columns else filtered_historical_df.copy()
+            if 'Quarter' not in quarter_df.columns:
+                quarter_df['Quarter'] = quarter_df['Week'].apply(lambda w: get_quarter(w, st.session_state.config['quarters']))
             
             # Quarter summary table
             quarter_summary = quarter_df.groupby(['Financial Year', 'Quarter', 'Branch'])['Total'].sum().reset_index()
@@ -1576,12 +1811,5 @@ else:
 <strong style="color: #334155;">Visual Analysis</strong>
 <p style="margin: 0; font-size: 0.9rem; color: #64748b;">Explore interactive charts, KPI cards, and detailed tables.</p>
 </div>
-</div>
-</div>
-<div style="color: #64748b; font-size: 0.95rem; margin-top: 2rem; background-color: #f1f5f9; padding: 1rem; border-radius: 6px;">
-    <strong>To get started:</strong>
-    <p style="margin: 0.5rem 0 0 0;">
-        Open the sidebar (click <strong>&gt;</strong> at top-left) and find the <strong>"Upload Sales Data"</strong> section.
-    </p>
 </div>
 </div>""", unsafe_allow_html=True)
