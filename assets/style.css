@@ -1,0 +1,309 @@
+/* Global Variables & Color Palette */
+:root {
+    --bg-color: #FAFBFC;
+    --card-bg: #FFFFFF;
+    --text-primary: #2D3748;
+    --text-secondary: #4A5568;
+    --accent-primary: #3B82F6;
+    --accent-success: #10B981;
+    --accent-warning: #EF4444;
+    --sidebar-bg: #F7FAFC;
+    --border-color: #E2E8F0;
+}
+
+/* App Container */
+.stApp {
+    background-color: var(--bg-color);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* Sidebar Customization */
+[data-testid="stSidebar"] {
+    background-color: var(--sidebar-bg);
+    border-right: 1px solid var(--border-color);
+}
+
+[data-testid="stSidebar"] hr {
+    margin: 1.5rem 0;
+    border-color: var(--border-color);
+}
+
+/* Headings */
+h1, h2, h3 {
+    color: var(--text-primary);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+}
+
+h1 {
+    font-size: 2.25rem;
+    padding-bottom: 1rem;
+    border-bottom: 2px solid var(--border-color);
+    margin-bottom: 2rem;
+}
+
+h2 {
+    font-size: 1.5rem;
+    margin-top: 2rem;
+    margin-bottom: 1rem;
+    padding-left: 12px;
+    border-left: 4px solid var(--accent-primary);
+}
+
+h3 {
+    font-size: 1.125rem;
+    color: var(--text-secondary);
+    margin-top: 1.5rem;
+}
+
+/* Cards / Containers */
+div.css-card {
+    background-color: var(--card-bg);
+    padding: 1.5rem;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03); /* Subtle shadow */
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--border-color);
+}
+
+/* Metric Cards Customization */
+[data-testid="stMetric"] {
+    background-color: var(--card-bg);
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); /* Very subtle metric shadow */
+}
+
+[data-testid="stMetricLabel"] {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+[data-testid="stMetricValue"] {
+    color: var(--text-primary);
+    font-weight: 700;
+}
+
+/* Expander Styling */
+.streamlit-expanderHeader {
+    background-color: var(--card-bg);
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+/* Button Styling (if any appear in main area) */
+button[kind="primary"] {
+    background-color: var(--accent-primary);
+    border: none;
+    border-radius: 6px;
+    padding: 0.5rem 1rem;
+    transition: all 0.2s ease;
+}
+
+button[kind="primary"]:hover {
+    background-color: #2563EB; /* Slightly darker blue */
+    box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);
+}
+
+/* Alert/Info/Warning Boxes */
+.stAlert {
+    border-radius: 8px;
+    border: none;
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+/* Hiding Streamlit Branding (Optional but cleaner) */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+/* header {visibility: hidden;}  <-- Commented out to ensure sidebar arrow is visible */
+
+/* Custom Utility Classes that can be injected */
+.text-muted {
+    color: var(--text-secondary);
+}
+
+.text-success {
+    color: var(--accent-success);
+}
+
+.text-danger {
+    color: var(--accent-warning);
+}
+
+/* Dataframe / Table Customization */
+[data-testid="stDataFrame"] {
+    background-color: var(--card-bg);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+/* =====================================================
+   OVERRIDE STREAMLIT ORANGE → BRAND BLUE (#3B82F6)
+   ===================================================== */
+
+/* Multiselect tags (the coloured pills) */
+[data-baseweb="tag"] {
+    background-color: #EFF6FF !important;
+    border: 1px solid #BFDBFE !important;
+    color: #1D4ED8 !important;
+}
+[data-baseweb="tag"] span {
+    color: #1D4ED8 !important;
+}
+/* × close button inside tag */
+[data-baseweb="tag"] [role="presentation"] svg {
+    fill: #3B82F6 !important;
+}
+
+/* Slider track fill & thumb */
+[data-testid="stSlider"] [data-testid="stSliderThumb"] {
+    background-color: #3B82F6 !important;
+    border-color: #3B82F6 !important;
+}
+[data-testid="stSlider"] div[class*="Track"] > div {
+    background: #3B82F6 !important;
+}
+/* Range slider filled portion */
+[data-testid="stSlider"] [role="slider"] {
+    background-color: #3B82F6 !important;
+    border-color: #3B82F6 !important;
+}
+/* Slider min/max value labels */
+[data-testid="stSlider"] p,
+[data-testid="stSlider"] span,
+[data-testid="stTickBarMin"],
+[data-testid="stTickBarMax"] {
+    color: var(--text-secondary) !important;
+}
+
+/* Streamlit primary buttons */
+.stButton > button[kind="primary"],
+.stButton > button:focus,
+.stButton > button:active {
+    background-color: #3B82F6 !important;
+    border-color: #3B82F6 !important;
+    color: white !important;
+}
+
+/* Checkbox / radio accent */
+[data-testid="stCheckbox"] label span[aria-checked="true"] div,
+[data-testid="stCheckbox"] input:checked + label span {
+    background-color: #3B82F6 !important;
+    border-color: #3B82F6 !important;
+}
+
+/* selectbox / multiselect focus ring */
+[data-baseweb="select"] [aria-selected="true"] {
+    background-color: #EFF6FF !important;
+    color: #1D4ED8 !important;
+}
+[data-baseweb="menu"] [aria-selected="true"],
+[data-baseweb="menu"] li:hover {
+    background-color: #EFF6FF !important;
+}
+
+/* Tab Styling */
+div[data-baseweb="tab-list"] {
+    gap: 24px;
+    background-color: transparent;
+    padding-bottom: 0px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+div[data-baseweb="tab"] {
+    height: 3rem;
+    white-space: nowrap;
+    border: none;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+div[data-baseweb="tab"]:focus {
+    outline: none;
+}
+
+div[data-baseweb="tab"][aria-selected="true"] {
+    color: var(--accent-primary);
+    border-bottom: 2px solid var(--accent-primary) !important;
+    font-weight: 600;
+}
+
+/* --- Phase 5: Responsive Adjustments --- */
+
+@media (max-width: 768px) {
+    /* Adjust main title size on mobile */
+    h1 {
+        font-size: 1.75rem !important;
+        margin-bottom: 1rem !important;
+    }
+
+    h2 {
+        font-size: 1.25rem !important;
+        border-left-width: 3px !important;
+        padding-left: 8px !important;
+    }
+
+    h3 {
+        font-size: 1.1rem !important;
+    }
+
+    /* Metric Cards on Mobile */
+    div[data-testid="metric-container"] {
+        padding: 1rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+
+    /* Dataframe Adjustments */
+    [data-testid="stDataFrame"] {
+        font-size: 0.85rem !important;
+    }
+
+    /* Hide sidebar by default logic handles itself, but adjust padding */
+    .block-container {
+        padding-top: 2rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+}
+
+@media (max-width: 1024px) {
+    /* Tablet Adjustments */
+    .css-card {
+        padding: 1.5rem !important;
+    }
+} 
+
+/* --- Optimization & Zoom Adjustment (Requested) --- */
+
+/* 1. Reduce default scale to "zoom out" slightly */
+body {
+    zoom: 0.9; /* 90% scale for desktop */
+}
+
+/* 2. Remove emojis from specific headers if marked with classes, or globally adjust font for icons */
+.st-emotion-cache-1629p8f h1, .st-emotion-cache-1629p8f h2, .st-emotion-cache-1629p8f h3 {
+    /* FontAwesome or Material Icons font family can be enforced here if loaded */
+    font-family: 'Inter', sans-serif; 
+}
+
+/* 3. Smooth scrolling */
+html {
+    scroll-behavior: smooth;
+}
+
+/* 4. Optimize dataframe rendering */
+[data-testid="stDataFrame"] {
+    /* Ensure it doesn't overflow unnecessarily */
+    overflow: auto; 
+}
+
+/* Mobile specific reset for zoom to avoid too small text */
+@media (max-width: 768px) {
+    body {
+        zoom: 1.0;
+    }
+}

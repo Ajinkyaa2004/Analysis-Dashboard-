@@ -5,7 +5,16 @@ import seaborn as sns
 import plotly.express as px
 
 
-st.set_page_config(layout="wide")
+st.set_page_config(page_title="Sales Analytics Dashboard", layout="wide", initial_sidebar_state="expanded")
+
+# Load Custom CSS
+def load_css(file_name):
+    with open(file_name) as f:
+        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+
+load_css("assets/style.css")
+# Inject FontAwesome 6 Free
+st.markdown('<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>', unsafe_allow_html=True)
 
 # ========================================
 # CONFIGURATION SECTION
@@ -45,11 +54,115 @@ if 'config' not in st.session_state:
         }
     }
 
+# ========================================
+# UI COMPONENTS
+# ========================================
+def apply_chart_theme(fig, title=None, height=None):
+    """Applies a professional consistent theme to Plotly charts"""
+    fig.update_layout(
+        template="plotly_white",
+        font={'family': "Inter, sans-serif", 'color': "#2D3748"},
+        title={'text': title, 'font': {'size': 18, 'color': '#1E293B'}, 'x': 0},
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=20, r=20, t=60, b=20),
+        height=height,
+        # 'closest' prevents the huge stacked tooltip panel that overflows on multi-series charts
+        hovermode='closest',
+        hoverlabel=dict(
+            bgcolor='white',
+            bordercolor='#E2E8F0',
+            font_size=13,
+            font_family='Inter, sans-serif'
+        ),
+        xaxis=dict(showgrid=False, linecolor='#E2E8F0', tickfont={'color': '#64748B'}),
+        yaxis=dict(showgrid=True, gridcolor='#F1F5F9', tickfont={'color': '#64748B'}),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    return fig
+
+def metric_card(title, value, description=None, icon=None):
+    """
+    Renders a professional metric card with optional FontAwesome icon.
+    """
+    desc_html = f'<div style="font-size: 0.8rem; color: #64748B; margin-top: 6px;">{description}</div>' if description else ""
+    icon_html = (
+        f'<div style="width: 38px; height: 38px; border-radius: 9px; '
+        f'background: linear-gradient(135deg, #EFF6FF, #DBEAFE); '
+        f'display: flex; align-items: center; justify-content: center; flex-shrink: 0;">'
+        f'<i class="{icon}" style="color: #3B82F6; font-size: 1rem;"></i></div>'
+    ) if icon else ""
+
+    st.markdown(f"""
+    <div class="css-card" style="padding: 1.25rem; display: flex; flex-direction: column; justify-content: space-between; height: 100%;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.75rem;">
+            <span style="font-size: 0.875rem; color: #64748B; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">{title}</span>
+            {icon_html}
+        </div>
+        <div style="font-size: 1.75rem; font-weight: 700; color: #1E293B;">
+            {value}
+        </div>
+        {desc_html}
+    </div>
+    """, unsafe_allow_html=True)
+
 # Helper function for currency formatting
 def format_currency(value, decimals=2):
     """Format a number as currency using the configured currency symbol"""
     currency_symbol = st.session_state.config['currency_symbol']
     return f"{currency_symbol}{value:,.{decimals}f}"
+
+# ========================================
+# UI HELPERS
+# ========================================
+
+def apply_table_style(df, format_cols=None, date_cols=None):
+    """
+    Applies professional styling to a dataframe.
+    """
+    if df.empty:
+        return df
+    
+    # Base Styler
+    styler = df.style
+    
+    # 1. Hide Index if simpler
+    styler.hide(axis='index')
+    
+    # 2. Format Currency Columns
+    if format_cols is not None and len(format_cols) > 0:
+        currency_fmt = f"{st.session_state.config.get('currency_symbol', '$')}{{:,.2f}}"
+        styler.format({col: currency_fmt for col in format_cols if col in df.columns})
+        
+    # 3. Format Date Columns
+    if date_cols is not None and len(date_cols) > 0:
+        for col in date_cols:
+            if col in df.columns:
+                 styler.format({col: lambda x: x.strftime('%d-%b-%Y') if pd.notnull(x) else ""})
+
+    # 4. Apply background gradient to numeric columns if relevant (optional)
+    # styler.background_gradient(cmap="Blues", subset=format_cols)
+    
+    # 5. Set Table Properties (CSS)
+    styler.set_table_styles([
+        {'selector': 'thead th', 'props': [
+            ('background-color', '#F8FAFC'),
+            ('color', '#475569'),
+            ('font-weight', '600'),
+            ('border-bottom', '2px solid #E2E8F0'),
+            ('text-align', 'left')
+        ]},
+        {'selector': 'tbody td', 'props': [
+            ('padding', '12px 16px'),
+            ('border-bottom', '1px solid #F1F5F9'),
+            ('color', '#334155')
+        ]},
+        {'selector': 'tbody tr:hover', 'props': [
+            ('background-color', '#F1F5F9')
+        ]},
+    ])
+    
+    return styler
 
 # ========================================
 # AUTO-DETECTION FUNCTIONS
@@ -356,12 +469,12 @@ def load_data(branch_files, branch_names, columns, date_format='dayfirst', csv_h
                         df.columns = [f"Column_{i+1}" for i in range(actual_cols)]
                         # Only warn if significant mismatch (not just off-by-one)
                         if abs(actual_cols - len(columns)) > 2:
-                            st.warning(f"⚠️ {branch_name}: Detected {actual_cols} columns (expected {len(columns)}). Using auto-detected structure.")
+                            st.warning(f"{branch_name}: Detected {actual_cols} columns (expected {len(columns)}). Using auto-detected structure.")
             
             df['Branch'] = branch_name
             dfs.append(df)
         except Exception as e:
-            st.error(f"❌ Error loading {branch_name} file: {str(e)}")
+            st.error(f"Error loading {branch_name} file: {str(e)}")
             return None
     
     if not dfs:
@@ -384,7 +497,7 @@ def load_data(branch_files, branch_names, columns, date_format='dayfirst', csv_h
     else:
         # Create dummy Customer column if not found
         df['Customer'] = 'Unknown Customer'
-        st.warning("⚠️ Customer column not found. Using default value.")
+        st.warning("Customer column not found. Using default value.")
     
     # Map Issue Date column
     if 'Issue Date' in column_mappings and column_mappings['Issue Date'] in df.columns:
@@ -401,7 +514,7 @@ def load_data(branch_files, branch_names, columns, date_format='dayfirst', csv_h
     else:
         # Create dummy Issue Date if not found
         df['Issue Date'] = pd.Timestamp.now()
-        st.error("❌ Issue Date column not found. Cannot proceed without date information.")
+        st.error("Issue Date column not found. Cannot proceed without date information.")
         return None
     
     # Map Total column
@@ -413,7 +526,7 @@ def load_data(branch_files, branch_names, columns, date_format='dayfirst', csv_h
     else:
         # Create dummy Total if not found
         df['Total'] = 0.0
-        st.error("❌ Total/Amount column not found. Cannot proceed without sales data.")
+        st.error("Total/Amount column not found. Cannot proceed without sales data.")
         return None
     
     # Ensure Branch column exists and is properly formatted
@@ -426,11 +539,22 @@ def load_data(branch_files, branch_names, columns, date_format='dayfirst', csv_h
     return df.dropna(subset=['Issue Date', 'Total', 'Branch'])
 
 # ========================================
-# SIDEBAR - CONFIGURATION SETTINGS
+# SIDEBAR HEADER
 # ========================================
-st.sidebar.title("⚙️ Configuration")
-with st.sidebar.expander("🔧 Advanced Settings (Optional)", expanded=False):
+st.sidebar.markdown("""
+<div style="margin-bottom: 1.25rem; padding: 1rem 1rem 0.75rem; background: linear-gradient(135deg, #EFF6FF, #DBEAFE); border-radius: 10px; border: 1px solid #BFDBFE;">
+    <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.25rem;">
+        <i class="fa-solid fa-chart-line" style="color: #3B82F6; font-size: 1.1rem;"></i>
+        <span style="font-size: 1.05rem; font-weight: 700; color: #1E293B;">Sales Analytics</span>
+    </div>
+    <p style="font-size: 0.72rem; color: #64748B; margin: 0;">Professional Dashboard v1.0</p>
+</div>
+""", unsafe_allow_html=True)
+st.sidebar.markdown('<p style="font-size: 0.8rem; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.07em; margin: 0.5rem 0 0.25rem;"><i class="fa-solid fa-gear" style="margin-right: 6px; color: #3B82F6;"></i>Settings</p>', unsafe_allow_html=True)
+
+with st.sidebar.expander("Configuration", expanded=False):
     st.markdown("**Customize these settings if your data has a different structure**")
+
     
     # Branch configuration
     st.markdown("##### Branch Names")
@@ -514,7 +638,7 @@ with st.sidebar.expander("🔧 Advanced Settings (Optional)", expanded=False):
     )
     
     # Apply button
-    if st.button("💾 Apply Configuration"):
+    if st.button("Apply Configuration"):
         st.session_state.config.update({
             'branches': config_branches,
             'excel_sheet_names': config_sheet_names,
@@ -525,7 +649,7 @@ with st.sidebar.expander("🔧 Advanced Settings (Optional)", expanded=False):
             'year_comparison_window': config_year_window,
             'csv_has_header': config_csv_has_header
         })
-        st.success("✅ Configuration updated!")
+        st.success("Configuration updated!")
         st.rerun()
 
 st.sidebar.markdown("---")
@@ -533,11 +657,12 @@ st.sidebar.markdown("---")
 # ========================================
 # SIDEBAR - FILE UPLOAD
 # ========================================
-st.sidebar.title("⬆ Upload Sales Data")
-st.sidebar.markdown("Upload CSV files for each branch:")
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Upload Sales Data")
 
 # Dynamic branch file uploaders
 uploaded_branch_files = []
+
 for branch in st.session_state.config['branches']:
     uploaded_file = st.sidebar.file_uploader(
         f"{branch} Branch CSV", 
@@ -548,9 +673,7 @@ for branch in st.session_state.config['branches']:
 
 st.sidebar.markdown("---")
 
-# Historical Data Upload
-st.sidebar.title("📊 Upload Historical Sales Data")
-st.sidebar.markdown("Upload Excel file for annual sales analysis:")
+st.sidebar.markdown('<p style="font-size: 0.8rem; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.07em; margin: 0.5rem 0 0.25rem;"><i class="fa-solid fa-file-excel" style="margin-right: 6px; color: #10B981;"></i>Upload Historical Data</p>', unsafe_allow_html=True)
 uploaded_historical = st.sidebar.file_uploader(
     f"Historical Sales Excel (with {', '.join(st.session_state.config['excel_sheet_names'])} sheets)", 
     type=['xlsx', 'xls'], 
@@ -599,7 +722,7 @@ if all_files_uploaded and 'auto_detected' not in st.session_state:
     # Apply detected updates
     if detected_updates:
         st.session_state.config.update(detected_updates)
-        st.sidebar.success("✨ Auto-detected file structure!")
+        st.sidebar.success("Auto-detected file structure!")
 
 # Auto-detect Excel sheets when historical file is uploaded
 if uploaded_historical is not None and 'excel_auto_detected' not in st.session_state:
@@ -622,7 +745,7 @@ if uploaded_historical is not None and 'excel_auto_detected' not in st.session_s
                     'Q3': (28, 40),
                     'Q4': (41, 53)
                 }
-            st.sidebar.info(f"📊 Detected {week_count} weeks in historical data")
+            st.sidebar.info(f"Detected {week_count} weeks in historical data")
         
         # If detected sheets look like branch names (2-4 chars, all caps), use them as branches too
         if all(len(s) <= 4 and s.isupper() for s in detected_sheets):
@@ -631,14 +754,14 @@ if uploaded_historical is not None and 'excel_auto_detected' not in st.session_s
             
             # Only show message if branches actually changed
             if old_branches != detected_sheets:
-                st.sidebar.success(f"✨ Auto-detected branches: {', '.join(detected_sheets)}")
-                st.sidebar.info("⬆️ Scroll up to upload CSV files for each branch")
+                st.sidebar.success(f"Auto-detected branches: {', '.join(detected_sheets)}")
+                st.sidebar.info("Scroll up to upload CSV files for each branch")
         else:
-            st.sidebar.info(f"📊 Detected Excel sheets: {', '.join(detected_sheets)}")
+            st.sidebar.info(f"Detected Excel sheets: {', '.join(detected_sheets)}")
 
 # Show auto-detected configuration in sidebar
 if all_files_uploaded or uploaded_historical is not None:
-    with st.sidebar.expander("🔍 Auto-Detected Configuration", expanded=False):
+    with st.sidebar.expander("Auto-Detected Configuration", expanded=False):
         if all_files_uploaded:
             st.markdown(f"""
             **CSV Structure:**
@@ -656,9 +779,9 @@ if all_files_uploaded or uploaded_historical is not None:
                 st.markdown("**Column Mappings:**")
                 for required_field, mapped_column in mappings.items():
                     if mapped_column:
-                        st.markdown(f"✅ `{required_field}` ← `{mapped_column}`")
+                        st.markdown(f"`{required_field}` ← `{mapped_column}`")
                 if len(mappings) < 3:
-                    st.warning("⚠️ Some required columns not mapped. Check your data structure.")
+                    st.warning("Some required columns not mapped. Check your data structure.")
         
         st.markdown(f"""
         **Branches:** {', '.join(st.session_state.config['branches'])}
@@ -688,7 +811,7 @@ if all_files_uploaded:
     )
 else:
     required_count = len(st.session_state.config['branches'])
-    st.sidebar.warning(f"⚠ Please upload all {required_count} CSV files to proceed")
+    st.sidebar.warning(f"Please upload all {required_count} CSV files to proceed")
     df = None
 
 @st.cache_data
@@ -783,76 +906,97 @@ if all_files_uploaded:
         except:
             historical_df = pd.DataFrame()
 
-    st.title("▸ Invoice & Customer Analysis Dashboard")
+    # Main Dashboard Title
+    # st.markdown('<h1 style="margin-bottom: 0;">Invoice & Customer Analysis Dashboard</h1>', unsafe_allow_html=True) 
+    # ^ Emojis removed from string literals if present earlier, but here it looks standard.
+    
+    # Check if there are other emojis in sidebar titles...
+    # st.sidebar.markdown("### 📤 Upload Sales Data") -> st.sidebar.markdown("### Upload Sales Data")
+    st.markdown('<p class="text-secondary" style="margin-bottom: 2rem;">Overview of sales performance across branches</p>', unsafe_allow_html=True)
 
     # ---- Filters ---- #
     branch_options = df['Branch'].dropna().unique().tolist()
     branch = st.sidebar.multiselect("Select Branch(es)", options=branch_options, default=branch_options)
 
+
     # Historical data filters
     if not historical_df.empty:
         financial_year_options = sorted(historical_df['Financial Year'].dropna().unique().tolist())
-
-        # Add a "Select All" checkbox
-        select_all_years = st.sidebar.checkbox("Select All Financial Years", value=True)
-
-        if select_all_years:
-            selected_financial_years = financial_year_options
-        else:
-            # Default to the first year if "Select All" is not checked and no years are selected
-            # Or you can choose to default to an empty list or specific years as per preference
-            default_selection = [financial_year_options[0]] if financial_year_options else []
-            selected_financial_years = st.sidebar.multiselect(
-                "Select Financial Year(s) (Historical Data)",
-                options=financial_year_options,
-                default=default_selection # Default to only the first year when "Select All" is off
-            )
-            # Handle case where user deselects all after unchecking "Select All"
-            if not selected_financial_years and not select_all_years:
-                st.sidebar.warning("Please select at least one financial year or 'Select All'.")
-                selected_financial_years = [] # Ensure it's an empty list to filter nothing
-
-        # Apply branch filter to historical data
-        filtered_historical_df = historical_df[
-            historical_df['Branch'].isin(branch) &
-            historical_df['Financial Year'].isin(selected_financial_years)
-        ].copy() # Ensure filtered_historical_df is a copy
+        # Default to selecting all years initially without extra UI clutter if possible, or keep simple
+        selected_financial_years = st.sidebar.multiselect(
+            "Select Financial Year(s)",
+            options=financial_year_options,
+            default=financial_year_options # Default select all
+        )
     else:
-        st.info("📁 Historical sales data not loaded. Upload an Excel file in the sidebar for Annual Sales Analysis.")
-        filtered_historical_df = pd.DataFrame()
+        st.sidebar.info("Upload historical data to enable year comparison")
+        selected_financial_years = [] 
 
+    with st.sidebar.expander("Data Filters", expanded=True):
+        customer_options = sorted(df['Customer'].dropna().unique().tolist())
+        # Performance: Limit initial options or use a search box effectively (multiselect does this well)
+        customer = st.multiselect("Select Customer(s)", options=customer_options)
 
-    customer_options = df['Customer'].dropna().unique().tolist()
-    customer_options = sorted(customer_options)
-    customer = st.sidebar.multiselect("Select Customer(s)", options=customer_options)
+        year_min, year_max = int(df['Year'].min()), int(df['Year'].max())
+        year_range = st.slider("Select Year Range", year_min, year_max, (year_min, year_max))
 
-    year_min, year_max = int(df['Year'].min()), int(df['Year'].max())
-    year_range = st.sidebar.slider("Select Year Range", year_min, year_max, (year_min, year_max))
+        # Date input can return a single date if not fully selected, handle carefully
+        date_range_val = st.date_input("Filter by Issue Date Range", [df['Issue Date'].min(), df['Issue Date'].max()])
+        
+        if isinstance(date_range_val, list) and len(date_range_val) == 2:
+            start_date = pd.to_datetime(date_range_val[0])
+            end_date = pd.to_datetime(date_range_val[1])
+        elif isinstance(date_range_val, list) and len(date_range_val) == 1:
+            start_date = pd.to_datetime(date_range_val[0])
+            end_date = pd.to_datetime(date_range_val[0]) # Start and end same day
+        else: 
+            # Fallback or single date selected without range
+            start_date = pd.to_datetime(df['Issue Date'].min())
+            end_date = pd.to_datetime(df['Issue Date'].max())
+            
+    # --- Performance Optimization: Cache Filtering ---
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def filter_main_data(df, branches, years, start, end, customers):
+        mask = (
+            df['Branch'].isin(branches) &
+            df['Year'].between(years[0], years[1]) &
+            df['Issue Date'].between(start, end)
+        )
+        filtered = df[mask]
+        if customers:
+            filtered = filtered[filtered['Customer'].isin(customers)]
+        return filtered
 
-    date_range = st.sidebar.date_input("Filter by Issue Date Range", [df['Issue Date'].min(), df['Issue Date'].max()])
-    start_date = pd.to_datetime(date_range[0])
-    end_date = pd.to_datetime(date_range[1])
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def filter_historical_data(hist_df, branches, financial_yrs):
+        if hist_df.empty: return pd.DataFrame()
+        return hist_df[
+            hist_df['Branch'].isin(branches) &
+            hist_df['Financial Year'].isin(financial_yrs)
+        ].copy()
 
-    # ---- Apply filters ---- #
-    filtered_df = df[
-        df['Branch'].isin(branch) &
-        df['Year'].between(*year_range) &
-        df['Issue Date'].between(start_date, end_date)
-    ]
-    if customer:
-        filtered_df = filtered_df[filtered_df['Customer'].isin(customer)]
+    filtered_df = filter_main_data(
+        df, 
+        tuple(branch), 
+        tuple(year_range), 
+        pd.to_datetime(start_date), 
+        pd.to_datetime(end_date), 
+        tuple(customer) if customer else None
+    )
+
+    filtered_historical_df = filter_historical_data(
+        historical_df, 
+        tuple(branch), 
+        tuple(selected_financial_years)
+    )
 
 
 
     # ---- Annual Sales ---- #
-    # import plotly.express as px
-    # import pandas as pd
-    # import streamlit as st
-
-    # st.header("📈 Annual Sales Report")
+    # st.header("Annual Sales Report")
 
     # # Grouping data by Year and Branch
-    # annual_sales = filtered_df.groupby(['Year', 'Branch'])['Total'].sum().reset_index()
+    annual_sales = filtered_df.groupby(['Year', 'Branch'])['Total'].sum().reset_index()
 
     # # Create pivot table for display
     # pivot_table = annual_sales.pivot(index='Year', columns='Branch', values='Total')
@@ -882,39 +1026,34 @@ if all_files_uploaded:
     #     hovermode='x unified'
     # )
 
-    # st.plotly_chart(fig, use_container_width=True)
-
-    # --- Annual Sales Analysis Dashboard ---
-    st.header("📊 Annual Sales Analysis Dashboard")
-
     if not filtered_historical_df.empty:
         # Create tabs for better organization
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 Overview", "📊 Quarter Analysis", "📅 Week Analysis", "📉 Comparative Analysis"])
+        tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Quarter Analysis", "Week Analysis", "Comparative Analysis"])
         
         with tab1:
-            st.subheader("Annual Sales Overview")
-            
-            # Key metrics in columns
-            col1, col2, col3, col4 = st.columns(4)
+            st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-gauge-high" style="color:#3B82F6;"></i> Annual Sales Overview</h3>', unsafe_allow_html=True)
             
             total_sales = filtered_historical_df['Total'].sum()
             avg_weekly_sales = filtered_historical_df['Total'].mean()
             total_weeks = filtered_historical_df['Week'].nunique()
             total_years = filtered_historical_df['Financial Year'].nunique()
+
+            # Custom Metric Cards
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                st.metric("Total Sales", format_currency(total_sales))
+                metric_card("Total Sales", format_currency(total_sales), description="All time revenue", icon="fa-solid fa-dollar-sign")
             with col2:
-                st.metric("Avg Weekly Sales", format_currency(avg_weekly_sales))
+                metric_card("Weekly Avg", format_currency(avg_weekly_sales), description="Average sales per week", icon="fa-solid fa-chart-line")
             with col3:
-                st.metric("Total Weeks", total_weeks)
+                metric_card("Active Weeks", str(total_weeks), description="Total weeks of data", icon="fa-solid fa-calendar-days")
             with col4:
-                st.metric("Financial Years", total_years)
+                metric_card("Financial Years", str(total_years), description="Years covered", icon="fa-solid fa-clock-rotate-left")
             
-            st.markdown("---")
+            st.markdown("<div style='margin-bottom: 2rem;'></div>", unsafe_allow_html=True)
             
             # Financial Year Total Sales Comparison
-            st.subheader("Financial Year Total Sales Comparison")
+            st.markdown("## Annual Performance")
             annual_historical_sales = filtered_historical_df.groupby(['Financial Year', 'Branch'])['Total'].sum().reset_index()
             
             if not annual_historical_sales.empty:
@@ -922,10 +1061,11 @@ if all_files_uploaded:
                 pivot_annual = annual_historical_sales.pivot(index='Financial Year', columns='Branch', values='Total').fillna(0)
                 pivot_annual['Total'] = pivot_annual.sum(axis=1)
                 
-                # Format as currency
-                currency_format = f"{st.session_state.config['currency_symbol']}{{:,.2f}}"
+                # Format as currency and apply professional styling
+                # Reset index to ensure Financial Year is visible as a column
+                pivot_annual_display = pivot_annual.reset_index()
                 st.dataframe(
-                    pivot_annual.style.format(currency_format),
+                    apply_table_style(pivot_annual_display, format_cols=pivot_annual.columns),
                     use_container_width=True
                 )
                 
@@ -936,45 +1076,75 @@ if all_files_uploaded:
                     y='Total',
                     color='Branch',
                     barmode='group',
-                    title='Total Sales per Financial Year by Branch',
-                    text_auto='.2s',
-                    hover_data={'Total': ':,.2f', 'Branch': True, 'Financial Year': True}
+                    title='Total Sales per Financial Year',
+                    color_discrete_sequence=px.colors.qualitative.Prism
                 )
-                fig_annual_hist.update_layout(
-                    xaxis_title='Financial Year',
-                    yaxis_title='Total Sales ($)',
-                    hovermode='x unified',
-                    height=500
+                apply_chart_theme(fig_annual_hist, title="Total Sales per Financial Year", height=500)
+                fig_annual_hist.update_traces(
+                    hovertemplate='<b>%{x}</b><br>Branch: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
                 )
                 st.plotly_chart(fig_annual_hist, use_container_width=True)
                 
+                st.markdown("<div style='margin-bottom: 2rem;'></div>", unsafe_allow_html=True)
+
                 # Year-over-Year Growth Analysis
-                st.subheader("Year-over-Year Growth Analysis")
+                st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrows-up-down" style="color:#3B82F6;"></i> Year-over-Year Growth Analysis</h3>', unsafe_allow_html=True)
                 yoy_growth = annual_historical_sales.pivot(index='Financial Year', columns='Branch', values='Total')
                 yoy_growth_pct = yoy_growth.pct_change() * 100
                 
                 if len(yoy_growth_pct) > 1:
-                    st.dataframe(
-                        yoy_growth_pct.style.format("{:.2f}%").highlight_max(axis=0, color='lightgreen').highlight_min(axis=0, color='lightcoral'),
-                        use_container_width=True
-                    )
+                    def _style_yoy(df):
+                        import math
+                        def _nan_cell(v):
+                            try:
+                                if v is None or (isinstance(v, float) and math.isnan(v)):
+                                    return 'background-color:#F8FAFC; color:#94A3B8; font-style:italic;'
+                            except Exception:
+                                pass
+                            return ''
+                        # axis=None + numpy gmap avoids the Series/DataFrame mismatch error
+                        base = (
+                            df.style
+                            .format("{:.2f}%", na_rep="—")
+                            .background_gradient(
+                                cmap='RdYlGn',
+                                axis=None,
+                                vmin=-50,
+                                vmax=50,
+                                gmap=df.fillna(0).values
+                            )
+                        )
+                        try:
+                            return base.map(_nan_cell)        # pandas >= 2.1
+                        except AttributeError:
+                            return base.applymap(_nan_cell)   # pandas < 2.1
+                    st.dataframe(_style_yoy(yoy_growth_pct), use_container_width=True)
             
+            st.markdown("<div style='margin-bottom: 2rem;'></div>", unsafe_allow_html=True)
+
             # Branch comparison
-            st.subheader("Branch Performance Comparison")
+            st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-building" style="color:#3B82F6;"></i> Branch Performance Comparison</h3>', unsafe_allow_html=True)
             branch_totals = filtered_historical_df.groupby('Branch')['Total'].sum().reset_index()
             fig_branch_pie = px.pie(
                 branch_totals,
                 values='Total',
                 names='Branch',
                 title='Sales Distribution by Branch',
-                hole=0.4,
-                hover_data={'Total': ':,.2f'}
+                hole=0.6,
+                hover_data={'Total': ':,.2f'},
+                color_discrete_sequence=px.colors.qualitative.Prism
             )
-            fig_branch_pie.update_traces(textposition='inside', textinfo='percent+label')
+            apply_chart_theme(fig_branch_pie, title="Sales Distribution by Branch")
+            fig_branch_pie.update_traces(
+                textposition='inside',
+                textinfo='percent+label',
+                hovertemplate='<b>%{label}</b><br>Total: $%{value:,.2f}<br>Share: %{percent}<extra></extra>',
+                insidetextorientation='auto'
+            )
             st.plotly_chart(fig_branch_pie, use_container_width=True)
         
         with tab2:
-            st.subheader("Quarter Analysis")
+            st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-calendar-days" style="color:#3B82F6;"></i> Quarter Analysis</h3>', unsafe_allow_html=True)
             
             # Add Quarter column to dataframe using configurable quarter definitions
             def get_quarter(week, quarters_config):
@@ -997,8 +1167,11 @@ if all_files_uploaded:
             quarter_pivot['Total'] = quarter_pivot.sum(axis=1)
             
             currency_format = f"{st.session_state.config['currency_symbol']}{{:,.2f}}"
+            # Apply table styling with reset index
+            quarter_pivot_display = quarter_pivot.reset_index()
+            numeric_cols = quarter_pivot.columns # Columns of pivot are branches + Total (all numeric)
             st.dataframe(
-                quarter_pivot.style.format(currency_format),
+                apply_table_style(quarter_pivot_display, format_cols=numeric_cols),
                 use_container_width=True
             )
             
@@ -1011,17 +1184,22 @@ if all_files_uploaded:
                 facet_col='Financial Year',
                 barmode='group',
                 title='Quarterly Sales Comparison Across Years',
-                text_auto='.2s'
+                color_discrete_sequence=px.colors.qualitative.Prism
             )
-            fig_quarter.update_layout(height=400)
+            apply_chart_theme(fig_quarter, title="Quarterly Sales Comparison", height=400)
+            # Strip "Financial Year=" prefix from facet column labels
+            fig_quarter.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+            fig_quarter.update_traces(
+                hovertemplate='<b>%{x}</b><br>Branch: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
+            )
             st.plotly_chart(fig_quarter, use_container_width=True)
         
         with tab3:
-            st.subheader("Week-wise Analysis")
+            st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-calendar-week" style="color:#3B82F6;"></i> Week-wise Analysis</h3>', unsafe_allow_html=True)
             
     if not filtered_historical_df.empty:
         # --- 2. Enhanced Quarter/Week Range Analysis ---
-        st.subheader("Quarter/Week Range Analysis")
+        st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-filter" style="color:#3B82F6;"></i> Quarter / Week Range Analysis</h3>', unsafe_allow_html=True)
 
         # Dynamically generate quarter options from configuration
         quarters_config = st.session_state.config['quarters']
@@ -1055,13 +1233,27 @@ if all_files_uploaded:
 
         if not quarter_week_filtered_df.empty:
             st.write(f"**Detailed Sales for Selected Range**")
-            st.dataframe(quarter_week_filtered_df[['Branch', 'Financial Year', 'Week', 'Total']].sort_values(['Branch', 'Financial Year', 'Week']), use_container_width=True)
+            display_quarter_week_df = quarter_week_filtered_df[['Branch', 'Financial Year', 'Week', 'Total']].sort_values(['Branch', 'Financial Year', 'Week'])
+            
+            # Optimized rendering for large dataframe
+            st.dataframe(
+                display_quarter_week_df,
+                column_config={
+                    "Total": st.column_config.NumberColumn(
+                        "Total Sales",
+                        format=f"{st.session_state.config['currency_symbol']}%.2f"
+                    ),
+                    "Week": st.column_config.NumberColumn("Week #", format="%d")
+                },
+                use_container_width=True,
+                height=400
+            )
 
             total_sales_for_range = quarter_week_filtered_df['Total'].sum()
             st.metric(label=f"Total Sales for Selected Range", value=format_currency(total_sales_for_range))
 
             # Line chart for selected week range/quarter
-            st.subheader("Sales Trend for Selected Range")
+            st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-chart-area" style="color:#3B82F6;"></i> Sales Trend for Selected Range</h3>', unsafe_allow_html=True)
             fig_quarter_week_trend = px.line(
                 quarter_week_filtered_df,
                 x='Week',
@@ -1070,12 +1262,25 @@ if all_files_uploaded:
                 line_dash='Financial Year',
                 markers=True,
                 title='Sales Trend by Week for Selected Range',
-                hover_data={'Total': ':.2f', 'Week': True, 'Financial Year': True, 'Branch': True}
+                color_discrete_sequence=px.colors.qualitative.Prism
             )
+            apply_chart_theme(fig_quarter_week_trend, title="Sales Trend by Week", height=450)
+            # Use a compact vertical legend to avoid the large horizontal legend
+            # squashing the chart area when many Branch × Financial Year combinations exist
             fig_quarter_week_trend.update_layout(
-                xaxis_title='Week Number',
-                yaxis_title='Total Sales',
-                hovermode='x unified'
+                legend=dict(
+                    orientation="v",
+                    yanchor="top",
+                    y=1,
+                    xanchor="left",
+                    x=1.01,
+                    font=dict(size=10),
+                    title=dict(text="Branch, Financial Year", font=dict(size=11))
+                ),
+                margin=dict(r=220)  # make room for the vertical legend
+            )
+            fig_quarter_week_trend.update_traces(
+                hovertemplate='<b>Week %{x}</b><br>%{fullData.name}<br>$%{y:,.0f}<extra></extra>'
             )
             fig_quarter_week_trend.update_xaxes(dtick=1)
             st.plotly_chart(fig_quarter_week_trend, use_container_width=True)
@@ -1086,7 +1291,7 @@ if all_files_uploaded:
         st.markdown("---") # Separator
 
         with tab4:
-            st.subheader("Comparative Analysis")
+            st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-scale-balanced" style="color:#3B82F6;"></i> Comparative Analysis</h3>', unsafe_allow_html=True)
             
             # Compare selected years
             available_years = sorted(filtered_historical_df['Financial Year'].unique())
@@ -1118,7 +1323,7 @@ if all_files_uploaded:
                         st.metric("Change", format_currency(difference), f"{pct_change:+.2f}%")
                     
                     # Week-by-week comparison
-                    st.subheader(f"Week-by-Week Comparison: {compare_year_1} vs {compare_year_2}")
+                    st.markdown(f'<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-right-left" style="color:#3B82F6;"></i> Week-by-Week Comparison: {compare_year_1} vs {compare_year_2}</h3>', unsafe_allow_html=True)
                     
                     comparison_df = pd.merge(
                         year1_data.groupby(['Week', 'Branch'])['Total'].sum().reset_index().rename(columns={'Total': f'{compare_year_1}'}),
@@ -1143,13 +1348,11 @@ if all_files_uploaded:
                         line_dash='Year',
                         markers=True,
                         title=f'Sales Comparison: {compare_year_1} vs {compare_year_2}',
-                        hover_data={'Total': ':,.2f'}
+                        color_discrete_sequence=px.colors.qualitative.Prism
                     )
-                    fig_comparison.update_layout(
-                        xaxis_title='Week Number',
-                        yaxis_title='Total Sales ($)',
-                        hovermode='x unified',
-                        height=500
+                    apply_chart_theme(fig_comparison, title=f'Sales Comparison: {compare_year_1} vs {compare_year_2}', height=500)
+                    fig_comparison.update_traces(
+                        hovertemplate='<b>Week %{x}</b><br>%{fullData.name}<br>$%{y:,.0f}<extra></extra>'
                     )
                     st.plotly_chart(fig_comparison, use_container_width=True)
                     
@@ -1162,7 +1365,7 @@ if all_files_uploaded:
                                 f'{compare_year_2}': currency_format,
                                 'Difference': currency_format,
                                 '% Change': '{:+.2f}%'
-                            }),
+                            }).background_gradient(cmap='RdYlGn', subset=['% Change'], vmin=-50, vmax=50),
                             use_container_width=True
                         )
                 else:
@@ -1172,7 +1375,7 @@ if all_files_uploaded:
     else:
         # Show message when no historical data is available
         st.info("""
-        📁 **No Historical Sales Data Available**
+        **No Historical Sales Data Available**
         
         Upload an Excel file in the sidebar (under 'Upload Historical Sales Data') to view:
         - Annual sales overview with key metrics
@@ -1185,20 +1388,24 @@ if all_files_uploaded:
 
     # ---- Monthly Sales ---- #
     # ---- Monthly Sales ---- #
-    st.header("▸ Monthly Branch Sales")
+    st.markdown('<h2><i class="fa-solid fa-chart-area" style="color:#3B82F6;margin-right:0.4rem;"></i>Monthly Branch Sales</h2>', unsafe_allow_html=True)
     monthly_sales = filtered_df.groupby(['Month', 'Branch'])['Total'].sum().reset_index()
 
     fig_month = px.line(
         monthly_sales, x="Month", y="Total", color="Branch", markers=True,
-        title="Monthly Sales by Branch", hover_data={"Total": True}
+        title="Monthly Sales by Branch",
+        color_discrete_sequence=px.colors.qualitative.Prism
     )
-    fig_month.update_traces(mode='lines+markers', hovertemplate='%{x}<br>Sales: %{y:.2f}')
-    fig_month.update_layout(xaxis_title="Month", yaxis_title="Sales")
+    fig_month.update_traces(
+        mode='lines+markers',
+        hovertemplate='<b>%{x}</b><br>Branch: %{fullData.name}<br>Sales: $%{y:,.0f}<extra></extra>'
+    )
+    apply_chart_theme(fig_month, title="Monthly Sales Trend", height=450)
     st.plotly_chart(fig_month, use_container_width=True)
 
 
     # ---- Dropping & Rising Customers ---- #
-    st.header(" Customer Trends (Drop vs Rise)")
+    st.markdown('<h2><i class="fa-solid fa-users" style="color:#3B82F6;margin-right:0.4rem;"></i>Customer Trends <span style="font-size:0.9rem;color:#64748B;font-weight:500;">(Drop vs Rise)</span></h2>', unsafe_allow_html=True)
 
     customer_sales = df[df['Branch'].isin(branch)].groupby(['Customer', 'Year'])['Total'].sum().reset_index()
     sales_pivot = customer_sales.pivot(index='Customer', columns='Year', values='Total').fillna(0)
@@ -1220,18 +1427,24 @@ if all_files_uploaded:
 
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader(f"⬇ Dropping Customers ({previous_year} → {current_year})")
+            st.markdown(f'<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrow-trend-down" style="color:#EF4444;"></i> Dropping Customers ({previous_year} → {current_year})</h3>', unsafe_allow_html=True)
             display_cols = ['Customer'] + [previous_year, current_year]
-            st.dataframe(dropping_customers[display_cols])
+            st.dataframe(
+                apply_table_style(dropping_customers[display_cols], format_cols=display_cols[1:]),
+                use_container_width=True
+            )
 
         with col2:
-            st.subheader(f"⬆ Rising Customers ({previous_year} → {current_year})")
-            st.dataframe(rising_customers[display_cols])
+            st.markdown(f'<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrow-trend-up" style="color:#10B981;"></i> Rising Customers ({previous_year} → {current_year})</h3>', unsafe_allow_html=True)
+            st.dataframe(
+                apply_table_style(rising_customers[display_cols], format_cols=display_cols[1:]),
+                use_container_width=True
+            )
     else:
         st.info(f"Not enough years for drop/rise analysis. Need at least {year_window} years of data.")
 
     # ---- Customer Purchase View ---- #
-    st.header("▸ Customer-wise Purchase Detail")
+    st.markdown('<h2><i class="fa-solid fa-receipt" style="color:#3B82F6;margin-right:0.4rem;"></i>Customer-wise Purchase Detail</h2>', unsafe_allow_html=True)
 
     # Multiselect Customer
     cust_df = filtered_df.groupby(['Customer', 'Year'])['Total'].sum().reset_index()
@@ -1260,14 +1473,32 @@ if all_files_uploaded:
         if 'dropping_customers' in locals() and 'previous_year' in locals() and 'current_year' in locals():
             for cust in selected_customers:
                 if cust in dropping_customers['Customer'].values:
-                    st.warning(f" {cust} is a **dropping customer** (sales declined from {previous_year} to {current_year}).")
+                    # Optimized warning
+                    st.warning(f"{cust} is a dropping customer (sales declined from {previous_year} to {current_year}).")
 
         # Show raw purchase records
-        # Show raw purchase records
-        st.subheader("Filtered Purchase Records")
+        st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-table-list" style="color:#3B82F6;"></i> Filtered Purchase Records</h3>', unsafe_allow_html=True)
+        display_cust_purchase = cust_purchase[['Customer', 'Issue Date', 'Branch', 'Invoice ID', 'Total']]
+        
+        # Optimized rendering: Using native column configuration for performance
         st.dataframe(
-            cust_purchase[['Customer', 'Issue Date', 'Branch', 'Invoice ID', 'Total']],
-            use_container_width=True
+            display_cust_purchase,
+            column_config={
+                "Issue Date": st.column_config.DateColumn(
+                    "Date",
+                    format="DD/MM/YYYY" if st.session_state.config['date_format'] == 'dayfirst' else "MM/DD/YYYY"
+                ),
+                "Total": st.column_config.NumberColumn(
+                    "Total Purchase",
+                    format=f"{st.session_state.config['currency_symbol']}%.2f"
+                ),
+                "Customer": "Customer Name",
+                "Branch": "Branch",
+                "Invoice ID": "Invoice"
+            },
+            use_container_width=True,
+            height=500,
+            hide_index=True
         )
 
         # Calculate and display the total sum of purchases
@@ -1275,32 +1506,39 @@ if all_files_uploaded:
         st.metric(label="Total Purchase for Filtered Records", value=format_currency(total_filtered_purchase))
 
         # Year-wise Total Purchases (Bar Chart)
-        st.subheader("▸ Year-wise Purchase Totals")
+        st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-chart-column" style="color:#3B82F6;"></i> Year-wise Purchase Totals</h3>', unsafe_allow_html=True)
         cust_yearly = cust_purchase.groupby(['Customer', 'Year'])['Total'].sum().reset_index()
 
         if not cust_yearly.empty:
             fig_year = px.bar(
                 cust_yearly, x="Year", y="Total", color="Customer", barmode='group',
-                title="Yearly Purchase Summary"
+                title="Yearly Purchase Summary",
+                color_discrete_sequence=px.colors.qualitative.Prism
             )
-            fig_year.update_traces(hovertemplate='Year: %{x}<br>Total: %{y:.2f}')
-            fig_year.update_layout(xaxis_title="Year", yaxis_title="Total Purchase")
+            fig_year.update_traces(
+                hovertemplate='<b>%{x}</b><br>Customer: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
+            )
+            apply_chart_theme(fig_year, title="Annual Purchase Summary", height=400)
             st.plotly_chart(fig_year, use_container_width=True)
         else:
             st.info("No yearly data available for selected customers/date range.")
 
         # Monthly Trend (Line Chart)
-        st.subheader("▸ Monthly Purchase Trend")
+        st.markdown('<h3 style="display:flex;align-items:center;gap:0.5rem;"><i class="fa-solid fa-arrow-trend-up" style="color:#3B82F6;"></i> Monthly Purchase Trend</h3>', unsafe_allow_html=True)
         cust_purchase['Month'] = cust_purchase['Issue Date'].dt.to_period('M').astype(str)
         cust_monthly = cust_purchase.groupby(['Customer', 'Month'])['Total'].sum().reset_index()
 
         if not cust_monthly.empty:
             fig_monthly = px.line(
                 cust_monthly, x="Month", y="Total", color="Customer", markers=True,
-                title="Monthly Purchase Trend"
+                title="Monthly Purchase Trend",
+                color_discrete_sequence=px.colors.qualitative.Prism
             )
-            fig_monthly.update_traces(hovertemplate='Month: %{x}<br>Total: %{y:.2f}')
-            fig_monthly.update_layout(xaxis_title="Month", yaxis_title="Total Purchase")
+            fig_monthly.update_traces(
+                mode='lines+markers',
+                hovertemplate='<b>%{x}</b><br>Customer: %{fullData.name}<br>Total: $%{y:,.0f}<extra></extra>'
+            )
+            apply_chart_theme(fig_monthly, title="Monthly Purchase History", height=450)
             st.plotly_chart(fig_monthly, use_container_width=True)
         else:
             st.info("No monthly data available for selected customers/date range.")
@@ -1309,33 +1547,41 @@ if all_files_uploaded:
         st.info("No customers found for the selected filters.")
 
 else:
-    # Show welcome message when no files are uploaded
-    st.title("▸ Invoice & Customer Analysis Dashboard")
+    # --- 5. Phase 5: Enhanced Empty State ---
+    st.markdown("<br><br>", unsafe_allow_html=True) 
     
-    branch_names = ", ".join(st.session_state.config['branches'])
-    num_branches = len(st.session_state.config['branches'])
-    
-    st.info(f"↑ Please upload CSV files for all {num_branches} branches ({branch_names}) using the sidebar to begin analysis.")
-    
-    st.markdown(f"""
-    ### ▸ Instructions:
-    1. Use the sidebar on the left to upload your CSV files
-    2. Upload one file for each branch: {branch_names}
-    3. Ensure your CSV files have the same structure with the expected columns
-    4. If your data structure is different, use the **⚙️ Configuration** → **🔧 Advanced Settings** in the sidebar to customize:
-       - Branch names
-       - Date format (DD/MM/YYYY or MM/DD/YYYY)
-       - Currency symbol
-       - Quarter definitions
-       - Excel sheet names for historical data
-    5. Once all files are uploaded, the dashboard will automatically display your analysis
-    
-    ### ▸ Available Visualizations:
-    - Annual and Monthly Sales Analysis
-    - Customer Trend Analysis (Rising vs Dropping Customers)
-    - Customer-wise Purchase Details
-    - Interactive Filters for Custom Analysis
-    
-    ### 🔧 Flexible Configuration:
-    This dashboard supports customizable data structures. If you get any errors, check the Advanced Settings.
-    """)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown(f"""<div style="text-align: center; padding: 2rem; background-color: white; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+<h1 style="border-bottom: none; margin-bottom: 0.5rem; color: #1e293b;">Welcome to Your Dashboard</h1>
+<p style="color: #64748b; font-size: 1.1rem; margin-bottom: 2rem;">Get powerful insights into your sales performance across <strong>{', '.join(st.session_state.config['branches'])}</strong>.</p>
+<div style="display: flex; flex-direction: column; gap: 1rem; text-align: left; background-color: #f8fafc; padding: 1.5rem; border-radius: 8px; margin-bottom: 2rem;">
+<div style="display: flex; gap: 1rem; align-items: start;">
+<div style="background-color: #dbeafe; color: #3b82f6; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; flex-shrink: 0;">1</div>
+<div>
+<strong style="color: #334155;">Upload Branch Data</strong>
+<p style="margin: 0; font-size: 0.9rem; color: #64748b;">Use the sidebar to upload CSV files for each branch.</p>
+</div>
+</div>
+<div style="display: flex; gap: 1rem; align-items: start;">
+<div style="background-color: #dbeafe; color: #3b82f6; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; flex-shrink: 0;">2</div>
+<div>
+<strong style="color: #334155;">Optional History</strong>
+<p style="margin: 0; font-size: 0.9rem; color: #64748b;">Upload historical Excel data for year-over-year comparisons.</p>
+</div>
+</div>
+<div style="display: flex; gap: 1rem; align-items: start;">
+<div style="background-color: #dbeafe; color: #3b82f6; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; flex-shrink: 0;">3</div>
+<div>
+<strong style="color: #334155;">Visual Analysis</strong>
+<p style="margin: 0; font-size: 0.9rem; color: #64748b;">Explore interactive charts, KPI cards, and detailed tables.</p>
+</div>
+</div>
+</div>
+<div style="color: #64748b; font-size: 0.95rem; margin-top: 2rem; background-color: #f1f5f9; padding: 1rem; border-radius: 6px;">
+    <strong>To get started:</strong>
+    <p style="margin: 0.5rem 0 0 0;">
+        Open the sidebar (click <strong>&gt;</strong> at top-left) and find the <strong>"Upload Sales Data"</strong> section.
+    </p>
+</div>
+</div>""", unsafe_allow_html=True)
