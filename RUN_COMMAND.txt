@@ -1,0 +1,38 @@
+# ================================
+# QUICK RUN COMMAND
+# ================================
+# Copy and paste this command into your terminal to run the project:
+
+cd "/Users/ajinkya/Downloads/analysis_dashboard " && source .venv/bin/activate && streamlit run app.py
+
+
+# ================================
+# ALTERNATIVE: Use the run script
+# ================================
+# Make the script executable (one-time setup):
+# chmod +x run.sh
+
+# Then run:
+# ./run.sh
+
+
+# ================================
+# MANUAL STEP-BY-STEP
+# ================================
+# 1. Navigate to project directory:
+cd "/Users/ajinkya/Downloads/analysis_dashboard "
+
+# 2. Activate virtual environment:
+source .venv/bin/activate
+
+# 3. Run the app:
+streamlit run app.py
+
+
+# ================================
+# NOTES
+# ================================
+# - The app will open in your default browser automatically
+# - Default URL is usually: http://localhost:8501
+# - Press Ctrl+C in terminal to stop the server
+# - If port 8501 is busy, Streamlit will use the next available port
